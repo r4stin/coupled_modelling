@@ -1,7 +1,13 @@
 from owlready2 import *
 import types
 import os
+import requests
+import io
+import xml.etree.ElementTree as ET
 from collections import Counter
+
+GRAPHDB_URL = os.getenv("GRAPHDB_URL", "http://localhost:7200")
+REPOSITORY = "coupled_modelling"
 
 
 def get_onto_path():
@@ -16,6 +22,135 @@ def get_db_path():
     return path
 
 
+def get_uri(name):
+    if name.startswith("http://") or name.startswith("https://"):
+        return name
+    return f"http://coupled_modelling.owl#{name}"
+
+
+def get_local_name(uri):
+    if '#' in uri:
+        return uri.split('#')[-1]
+    return uri.split('/')[-1]
+
+
+def query_graphdb(sparql_query):
+    """
+    Executes a SPARQL query against the GraphDB repository.
+    Returns the JSON results as a dictionary.
+    """
+    url = f"{GRAPHDB_URL}/repositories/{REPOSITORY}"
+    headers = {
+        "Accept": "application/sparql-results+json",
+        "Content-Type": "application/sparql-query"
+    }
+    response = requests.post(url, data=sparql_query, headers=headers)
+    if response.status_code != 200:
+        raise Exception(f"GraphDB SPARQL query failed with status code {response.status_code}: {response.text}")
+    return response.json()
+
+
+def push_to_graphdb():
+    """Exports the local ontology and pushes it to GraphDB via REST API replacing the named graph."""
+    try:
+        temp_path = os.path.join(os.path.dirname(get_onto_path()), "temp_sync.owl")
+        try:
+            onto.save(temp_path)
+            with open(temp_path, "r", encoding="utf-8") as f:
+                data_str = f.read()
+            
+            data = data_str.encode("utf-8")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+        url = f"{GRAPHDB_URL}/repositories/{REPOSITORY}/statements"
+        headers = {"Content-Type": "application/rdf+xml"}
+        params = {"context": f"<{onto_uri}>"}
+        response = requests.put(url, data=data, headers=headers, params=params)
+        if response.status_code not in [200, 204]:
+            print(f"Failed to push to GraphDB: {response.status_code} - {response.text}")
+        else:
+            print("Successfully synchronized local ontology with GraphDB (named graph).")
+            # Run SPARQL rewrite to remove trailing slash from GraphDB IRIs
+            try:
+                update_url = f"{GRAPHDB_URL}/repositories/{REPOSITORY}/statements"
+                update_headers = {"Content-Type": "application/sparql-update"}
+                update_query = f"""
+                DELETE {{
+                    GRAPH <{onto_uri}> {{
+                        ?s ?p ?o .
+                    }}
+                }}
+                INSERT {{
+                    GRAPH <{onto_uri}> {{
+                        ?s2 ?p2 ?o2 .
+                    }}
+                }}
+                WHERE {{
+                    GRAPH <{onto_uri}> {{
+                        ?s ?p ?o .
+                        BIND(IF(isIRI(?s),
+                            IRI(REPLACE(STR(?s), "^http://coupled_modelling\\\\.owl/#", "http://coupled_modelling.owl#")),
+                            ?s
+                        ) AS ?s2)
+                        BIND(IF(isIRI(?p),
+                            IRI(REPLACE(STR(?p), "^http://coupled_modelling\\\\.owl/#", "http://coupled_modelling.owl#")),
+                            ?p
+                        ) AS ?p2)
+                        BIND(IF(isIRI(?o),
+                            IRI(REPLACE(STR(?o), "^http://coupled_modelling\\\\.owl/#", "http://coupled_modelling.owl#")),
+                            ?o
+                        ) AS ?o2)
+                        FILTER(?s != ?s2 || ?p != ?p2 || ?o != ?o2)
+                    }}
+                }}
+                """
+                update_res = requests.post(update_url, data=update_query, headers=update_headers)
+                if update_res.status_code not in [200, 204]:
+                    print(f"Failed to run GraphDB namespace rewrite: {update_res.status_code} - {update_res.text}")
+                else:
+                    print("Successfully rewrote GraphDB namespaces (removed trailing slashes).")
+            except Exception as rewrite_err:
+                print(f"Failed to rewrite GraphDB namespaces: {rewrite_err}")
+    except Exception as e:
+        print(f"Failed to push to GraphDB: {e}")
+
+
+def pull_from_graphdb():
+    """Fetches ontology from GraphDB named graph directly."""
+    url = f"{GRAPHDB_URL}/repositories/{REPOSITORY}/statements"
+    headers = {"Accept": "application/rdf+xml"}
+    params = {"context": f"<{onto_uri}>", "infer": "false"}
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        if response.status_code == 200:
+            content = response.content
+            if b"rdf:about" in content or b"rdf:Description" in content:
+                # Validate XML
+                try:
+                    ET.fromstring(content)
+                    return content
+                except Exception as xml_err:
+                    print(f"Invalid RDF/XML retrieved from GraphDB: {xml_err}")
+                    return None
+        return None
+    except Exception as e:
+        print(f"Could not pull from GraphDB: {e}")
+        return None
+
+
+def load_before_mutate():
+    global onto, default_world
+    try:
+        import owlready2
+        owlready2.default_world = owlready2.World()
+        default_world = owlready2.default_world
+        onto = load_onto()
+    except Exception as e:
+        print(f"Failed to load latest ontology before mutation: {e}")
+
+
 def new_onto():
     onto = default_world.get_ontology(onto_uri)
     return onto
@@ -28,10 +163,31 @@ def load_onto():
     Returns:
         Loaded ontology
     """ 
+    rdf_xml_data = None
+    try:
+        rdf_xml_data = pull_from_graphdb()
+    except Exception as e:
+        print(f"Failed to pull from GraphDB during load: {e}")
+
     onto = default_world.get_ontology(onto_uri)
-    onto.load()
-    
-    return onto
+
+    if rdf_xml_data:
+        try:
+            onto.load(fileobj=io.BytesIO(rdf_xml_data))
+            print("Successfully loaded ontology from GraphDB.")
+            return onto
+        except Exception as e:
+            print(f"Failed to load pulled RDF/XML into Owlready2: {e}. Falling back to local onto.owl.")
+
+    try:
+        with open(get_onto_path(), "rb") as f:
+            onto.load(fileobj=f)
+        print("Successfully loaded ontology from local onto.owl.")
+        return onto
+    except Exception as e:
+        print(f"Failed to load local onto.owl: {e}")
+        onto.load()
+        return onto
 
 
 def save_onto():
@@ -40,6 +196,10 @@ def save_onto():
 
     """
     default_world.save()
+    try:
+        push_to_graphdb()
+    except Exception as e:
+        print(f"Failed to push to GraphDB during save: {e}")
 
 
 def save_locally():
@@ -767,10 +927,11 @@ def get_class_hierarchy():
     return res
 
 
-onto_uri = 'http://coupled_modelling.owl#'
-default_world.set_backend(filename = get_db_path())
+onto_uri = 'http://coupled_modelling.owl'
+# default_world.set_backend(filename = get_db_path())
 
 try:
     onto = load_onto()
-except:
+except Exception as e:
+    print(f"Failed to load onto: {e}")
     onto = new_onto()
