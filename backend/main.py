@@ -449,8 +449,28 @@ def get_subclasses(class_label):
     Returns:
         A list of the subclass names.
     """
-    cl = onto.search_one(label = class_label)
-    return [x.name for x in cl.subclasses()]
+    try:
+        query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT DISTINCT ?subClass WHERE {{
+            ?class rdfs:label "{class_label}" .
+            ?subClass rdfs:subClassOf ?class .
+            FILTER (?subClass != ?class)
+        }}
+        """
+        res = query_graphdb(query)
+        subclasses = []
+        for binding in res.get("results", {}).get("bindings", []):
+            subclass_uri = binding["subClass"]["value"]
+            subclasses.append(get_local_name(subclass_uri))
+        return subclasses
+    except Exception as e:
+        print(f"GraphDB query failed in get_subclasses: {e}. Falling back to Owlready2.")
+        cl = onto.search_one(label = class_label)
+        if cl:
+            return [x.name for x in cl.subclasses()]
+        return []
 
 
 def get_instance_properties(inst_name):
@@ -463,24 +483,94 @@ def get_instance_properties(inst_name):
     Returns:
         A dictionary of instance properties and their values.
     """
-    inst = onto[inst_name]
-    props = {}
-    for prop in inst.get_properties():
-        temp = []
-        for obj in prop[inst]:
-            if hasattr(obj, 'name'):
-                if has_only_label(obj):
-                    temp.append(obj.label[0])
+    try:
+        inst_uri = get_uri(inst_name)
+        query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT ?prop ?obj ?obj_label (COUNT(?other_prop) AS ?prop_count) WHERE {{
+            <{inst_uri}> ?prop ?obj .
+            FILTER (?prop != rdf:type)
+            OPTIONAL {{
+                ?obj rdfs:label ?obj_label .
+            }}
+            OPTIONAL {{
+                ?obj ?other_prop ?other_val .
+                FILTER (?other_prop != rdf:type && ?other_prop != rdfs:label)
+            }}
+        }} GROUP BY ?prop ?obj ?obj_label
+        """
+        res = query_graphdb(query)
+        
+        raw_props = {}
+        for binding in res.get("results", {}).get("bindings", []):
+            prop_uri = binding["prop"]["value"]
+            prop_name = get_local_name(prop_uri).replace('has_', '')
+            
+            obj_binding = binding["obj"]
+            obj_type = obj_binding.get("type")
+            obj_val = obj_binding["value"]
+            
+            if obj_type in ["literal", "typed-literal"]:
+                datatype = obj_binding.get("datatype")
+                if datatype == "http://www.w3.org/2001/XMLSchema#integer":
+                    val = int(obj_val)
+                elif datatype == "http://www.w3.org/2001/XMLSchema#double" or datatype == "http://www.w3.org/2001/XMLSchema#float":
+                    val = float(obj_val)
+                elif datatype == "http://www.w3.org/2001/XMLSchema#boolean":
+                    val = obj_val.lower() == "true"
                 else:
-                    temp.append(obj.name)
+                    if obj_val == "True":
+                        val = True
+                    elif obj_val == "False":
+                        val = False
+                    else:
+                        try:
+                            if '.' in obj_val:
+                                val = float(obj_val)
+                            else:
+                                val = int(obj_val)
+                        except ValueError:
+                            val = obj_val
             else:
-                temp.append(obj)
-        prop_name = prop.name.replace('has_', '')
-        if len(temp) == 1 and not prop_name in force_list():
-            props[prop_name] = temp[0]
-        else:
-            props[prop_name] = temp
-    return props
+                prop_count = int(binding.get("prop_count", {}).get("value", 0))
+                if prop_count == 0 and "obj_label" in binding:
+                    val = binding["obj_label"]["value"]
+                else:
+                    val = get_local_name(obj_val)
+            
+            if prop_name not in raw_props:
+                raw_props[prop_name] = []
+            if val not in raw_props[prop_name]:
+                raw_props[prop_name].append(val)
+                
+        props = {}
+        for prop_name, temp in raw_props.items():
+            if len(temp) == 1 and not prop_name in force_list():
+                props[prop_name] = temp[0]
+            else:
+                props[prop_name] = temp
+        return props
+    except Exception as e:
+        print(f"GraphDB query failed in get_instance_properties: {e}. Falling back to Owlready2.")
+        inst = onto[inst_name]
+        props = {}
+        for prop in inst.get_properties():
+            temp = []
+            for obj in prop[inst]:
+                if hasattr(obj, 'name'):
+                    if has_only_label(obj):
+                        temp.append(obj.label[0])
+                    else:
+                        temp.append(obj.name)
+                else:
+                    temp.append(obj)
+            prop_name = prop.name.replace('has_', '')
+            if len(temp) == 1 and not prop_name in force_list():
+                props[prop_name] = temp[0]
+            else:
+                props[prop_name] = temp
+        return props
 
     
 def get_class_instances(class_name):
@@ -493,8 +583,27 @@ def get_class_instances(class_name):
     Returns:
         A list of class instance names.
     """
-    cl = onto[class_name]
-    return [x.name for x in cl.instances()]
+    try:
+        class_uri = get_uri(class_name)
+        query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT DISTINCT ?inst WHERE {{
+            ?inst rdf:type/rdfs:subClassOf* <{class_uri}> .
+        }}
+        """
+        res = query_graphdb(query)
+        instances = []
+        for binding in res.get("results", {}).get("bindings", []):
+            inst_uri = binding["inst"]["value"]
+            instances.append(get_local_name(inst_uri))
+        return instances
+    except Exception as e:
+        print(f"GraphDB query failed in get_class_instances: {e}. Falling back to Owlready2.")
+        cl = onto[class_name]
+        if cl:
+            return [x.name for x in cl.instances()]
+        return []
 
 
 def get_values(subj, prop):
@@ -678,10 +787,15 @@ def copy_instance(inst, parent=None, data=None):
 
     if parent:
         parent = onto[parent]
-        for subj, prop in inst.get_inverse_properties():
-            if type(subj) == cl:
+        prop = None
+        for subj, p in inst.get_inverse_properties():
+            prop = p
+            if isinstance(subj, type(parent)):
                 break
-        prop[parent].append(new_inst)
+        if prop is not None:
+            prop[parent].append(new_inst)
+        else:
+            raise ValueError(f"Could not find any inverse property on {inst.name} to connect to parent {parent.name}")
     
     if data:
         new_props = data.keys()
@@ -706,7 +820,7 @@ def copy_instance(inst, parent=None, data=None):
     return new_inst.name
 
 
-def copy_instance_recursively(inst, parent=None, data=None, depth=1, recursive=False):
+def copy_instance_recursively(inst, parent=None, data=None, depth=1, recursive=False, is_top=True):
     """
     Creates a structural copy of a given instance with all it properties revursively.
 
@@ -732,7 +846,7 @@ def copy_instance_recursively(inst, parent=None, data=None, depth=1, recursive=F
             for obj in objects:
                 if hasattr(obj, 'name'):
                     if not has_only_label(obj):
-                        obj = copy_instance_recursively(obj.name, depth=depth, recursive=recursive)
+                        obj = copy_instance_recursively(obj.name, depth=depth, recursive=recursive, is_top=False)
                         obj = onto[obj]
                         prop[new_inst].append(obj)
 
@@ -897,7 +1011,6 @@ def infer_coupled_system_structure(coupled_system):
     insts = {}
     get_connected_instances_recursively(coupled_system, insts, 0)
     infer_class_properties_recursively(insts)
-    save_onto()
 
 
 def import_coupled_kratos(data, label):
@@ -920,11 +1033,45 @@ def import_coupled_kratos(data, label):
 
 
 def get_class_hierarchy():
-    res = {}
-    for cl in onto.classes():
-        if cl.is_a == [Thing]:
-            res[cl.name] = [x.name for x in cl.subclasses()]
-    return res
+    """
+    Returns a dictionary mapping root classes to their subclasses.
+    """
+    try:
+        query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+        SELECT DISTINCT ?class ?subClass WHERE {{
+            ?class rdf:type owl:Class .
+            FILTER (STRSTARTS(STR(?class), "http://coupled_modelling.owl#"))
+            FILTER NOT EXISTS {{
+                ?class rdfs:subClassOf ?parent .
+                FILTER (?parent != owl:Thing && ?parent != ?class && STRSTARTS(STR(?parent), "http://coupled_modelling.owl#"))
+            }}
+            OPTIONAL {{
+                ?subClass rdfs:subClassOf ?class .
+                FILTER (?subClass != ?class)
+            }}
+        }}
+        """
+        res = query_graphdb(query)
+        hierarchy = {}
+        for binding in res.get("results", {}).get("bindings", []):
+            class_name = get_local_name(binding["class"]["value"])
+            if class_name not in hierarchy:
+                hierarchy[class_name] = []
+            if "subClass" in binding:
+                subclass_name = get_local_name(binding["subClass"]["value"])
+                if subclass_name not in hierarchy[class_name]:
+                    hierarchy[class_name].append(subclass_name)
+        return hierarchy
+    except Exception as e:
+        print(f"GraphDB query failed in get_class_hierarchy: {e}. Falling back to Owlready2.")
+        res = {}
+        for cl in onto.classes():
+            if cl.is_a == [Thing]:
+                res[cl.name] = [x.name for x in cl.subclasses()]
+        return res
 
 
 onto_uri = 'http://coupled_modelling.owl'
