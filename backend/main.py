@@ -72,7 +72,10 @@ def push_to_graphdb():
             print(f"Failed to push to GraphDB: {response.status_code} - {response.text}")
         else:
             print("Successfully synchronized local ontology with GraphDB (named graph).")
-            # Run SPARQL rewrite to remove trailing slash from GraphDB IRIs
+            # Note: GraphDB/RDF4J normalizes empty-path base URIs to include a trailing slash (RFC 3986).
+            # Because Owlready2 saves using relative `rdf:about="#entity"` references, the GraphDB parser
+            # resolves them to `http://coupled_modelling.owl/#entity`. 
+            # We run a SPARQL update here to clean and restore them to the canonical hash namespace (`...#entity`).
             try:
                 update_url = f"{GRAPHDB_URL}/repositories/{REPOSITORY}/statements"
                 update_headers = {"Content-Type": "application/sparql-update"}
@@ -195,7 +198,6 @@ def save_onto():
     Saves the ontology.
 
     """
-    default_world.save()
     try:
         push_to_graphdb()
     except Exception as e:
@@ -454,9 +456,11 @@ def get_subclasses(class_label):
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT DISTINCT ?subClass WHERE {{
-            ?class rdfs:label "{class_label}" .
-            ?subClass rdfs:subClassOf ?class .
-            FILTER (?subClass != ?class)
+            GRAPH <{onto_uri}> {{
+                ?class rdfs:label "{class_label}" .
+                ?subClass rdfs:subClassOf ?class .
+                FILTER (?subClass != ?class)
+            }}
         }}
         """
         res = query_graphdb(query)
@@ -489,14 +493,16 @@ def get_instance_properties(inst_name):
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT ?prop ?obj ?obj_label (COUNT(?other_prop) AS ?prop_count) WHERE {{
-            <{inst_uri}> ?prop ?obj .
-            FILTER (?prop != rdf:type)
-            OPTIONAL {{
-                ?obj rdfs:label ?obj_label .
-            }}
-            OPTIONAL {{
-                ?obj ?other_prop ?other_val .
-                FILTER (?other_prop != rdf:type && ?other_prop != rdfs:label)
+            GRAPH <{onto_uri}> {{
+                <{inst_uri}> ?prop ?obj .
+                FILTER (?prop != rdf:type)
+                OPTIONAL {{
+                    ?obj rdfs:label ?obj_label .
+                }}
+                OPTIONAL {{
+                    ?obj ?other_prop ?other_val .
+                    FILTER (?other_prop != rdf:type && ?other_prop != rdfs:label)
+                }}
             }}
         }} GROUP BY ?prop ?obj ?obj_label
         """
@@ -589,7 +595,9 @@ def get_class_instances(class_name):
         PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT DISTINCT ?inst WHERE {{
-            ?inst rdf:type/rdfs:subClassOf* <{class_uri}> .
+            GRAPH <{onto_uri}> {{
+                ?inst rdf:type/rdfs:subClassOf* <{class_uri}> .
+            }}
         }}
         """
         res = query_graphdb(query)
@@ -651,7 +659,8 @@ def add_value(subj, prop_name, value=None):
     
     if value == None:
         cl = get_class(prop_name)
-        value = cl(instance_name())
+        with onto:
+            value = cl(instance_name())
         prop = get_relation(prop_name)
         prop[subj].append(value)
     elif type(value) == str and not value.startswith('http'):
@@ -781,43 +790,44 @@ def copy_instance(inst, parent=None, data=None):
     Returns:
         Created instance.
     """
-    inst = onto[inst]
-    cl = type(inst)
-    new_inst = cl(instance_name())
+    with onto:
+        inst = onto[inst]
+        cl = type(inst)
+        new_inst = cl(instance_name())
 
-    if parent:
-        parent = onto[parent]
-        prop = None
-        for subj, p in inst.get_inverse_properties():
-            prop = p
-            if isinstance(subj, type(parent)):
-                break
-        if prop is not None:
-            prop[parent].append(new_inst)
-        else:
-            raise ValueError(f"Could not find any inverse property on {inst.name} to connect to parent {parent.name}")
-    
-    if data:
-        new_props = data.keys()
-    
-    for prop in inst.get_properties():
+        if parent:
+            parent = onto[parent]
+            prop = None
+            for subj, p in inst.get_inverse_properties():
+                prop = p
+                if isinstance(subj, type(parent)):
+                    break
+            if prop is not None:
+                prop[parent].append(new_inst)
+            else:
+                raise ValueError(f"Could not find any inverse property on {inst.name} to connect to parent {parent.name}")
         
         if data:
-            if prop.name.replace('has_', '') in new_props:
-                continue
-
-        objects = prop[inst]
-        for obj in objects:
-            if hasattr(obj, 'name'):
-                if not has_only_label(obj):
+            new_props = data.keys()
+        
+        for prop in inst.get_properties():
+            
+            if data:
+                if prop.name.replace('has_', '') in new_props:
                     continue
-            prop[new_inst].append(obj)
-    
-    if data:
-        for prop, value in data.items():
-            add_value(new_inst.name, prop, value)
-    
-    return new_inst.name
+
+            objects = prop[inst]
+            for obj in objects:
+                if hasattr(obj, 'name'):
+                    if not has_only_label(obj):
+                        continue
+                prop[new_inst].append(obj)
+        
+        if data:
+            for prop, value in data.items():
+                add_value(new_inst.name, prop, value)
+        
+        return new_inst.name
 
 
 def copy_instance_recursively(inst, parent=None, data=None, depth=1, recursive=False, is_top=True):
@@ -830,27 +840,27 @@ def copy_instance_recursively(inst, parent=None, data=None, depth=1, recursive=F
     Returns:
         Created instance.
     """
-    new_inst = copy_instance(inst, parent, data)
-    new_inst = onto[new_inst]
-    inst = onto[inst]
-    
-    if recursive == True:
-        depth = None
+    with onto:
+        new_inst = copy_instance(inst, parent, data)
+        new_inst = onto[new_inst]
+        inst = onto[inst]
+        
+        if recursive == True:
+            depth = None
 
-    if depth:
-        depth -= 1
+        if depth:
+            depth -= 1
 
-    if depth == None or depth > 0:
-        for prop in inst.get_properties():
-            objects = prop[inst]
-            for obj in objects:
-                if hasattr(obj, 'name'):
-                    if not has_only_label(obj):
-                        obj = copy_instance_recursively(obj.name, depth=depth, recursive=recursive, is_top=False)
-                        obj = onto[obj]
-                        prop[new_inst].append(obj)
-
-    return new_inst.name
+        if depth == None or depth > 0:
+            for prop in inst.get_properties():
+                objects = prop[inst]
+                for obj in objects:
+                    if hasattr(obj, 'name'):
+                        if not has_only_label(obj):
+                            obj = copy_instance_recursively(obj.name, depth=depth, recursive=recursive, is_top=False)
+                            obj = onto[obj]
+                            prop[new_inst].append(obj)
+        return new_inst.name
 
 
 def export_coupled_kratos(coupled_system):
@@ -1042,15 +1052,17 @@ def get_class_hierarchy():
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         PREFIX owl: <http://www.w3.org/2002/07/owl#>
         SELECT DISTINCT ?class ?subClass WHERE {{
-            ?class rdf:type owl:Class .
-            FILTER (STRSTARTS(STR(?class), "http://coupled_modelling.owl#"))
-            FILTER NOT EXISTS {{
-                ?class rdfs:subClassOf ?parent .
-                FILTER (?parent != owl:Thing && ?parent != ?class && STRSTARTS(STR(?parent), "http://coupled_modelling.owl#"))
-            }}
-            OPTIONAL {{
-                ?subClass rdfs:subClassOf ?class .
-                FILTER (?subClass != ?class)
+            GRAPH <{onto_uri}> {{
+                ?class rdf:type owl:Class .
+                FILTER (STRSTARTS(STR(?class), "http://coupled_modelling.owl#"))
+                FILTER NOT EXISTS {{
+                    ?class rdfs:subClassOf ?parent .
+                    FILTER (?parent != owl:Thing && ?parent != ?class && STRSTARTS(STR(?parent), "http://coupled_modelling.owl#"))
+                }}
+                OPTIONAL {{
+                    ?subClass rdfs:subClassOf ?class .
+                    FILTER (?subClass != ?class)
+                }}
             }}
         }}
         """
