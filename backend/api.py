@@ -101,10 +101,11 @@ def api_get_instance_properties_recursively():
         recursive = False
         
     try:
+        load_before_mutate()
         props = get_instance_properties_recursively(inst, depth, recursive)
-        return jsonify(props), '200'
-    except:
-        return '400'
+        return jsonify(props), 200
+    except Exception as e:
+        return jsonify(error=str(e)), 400
 
 
 @app.route('/api/v1.0/replace_values/', methods=['POST'])
@@ -181,6 +182,7 @@ def api_export_coupled_kratos():
     args = request.get_json()
     inst = args.get('coupled_system')
     try:
+        load_before_mutate()
         export = export_coupled_kratos(inst)
         return jsonify(export), 201
     except Exception as e:
@@ -199,6 +201,7 @@ def api_save_onto():
 @app.route('/api/v1.0/save_locally/', methods=['GET'])
 def api_save_locally():
     try:
+        load_before_mutate()
         save_locally()
         return send_file(get_onto_path()), 200
     except Exception as e:
@@ -227,6 +230,7 @@ def api_get_class_properties_recursively():
     else:
         recursive = False
     try:
+        load_before_mutate()
         props = get_class_properties_recursively(cl, depth, recursive)
         return jsonify(props), 200
     except Exception as e:
