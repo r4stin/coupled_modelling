@@ -10,7 +10,7 @@ def api_import_coupled_kratos():
     data = args.get('data')
     label = args.get('label')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         inst = import_coupled_kratos(data, label)
         save_onto()
         return jsonify(inst), 201
@@ -25,7 +25,7 @@ def api_create_coupled():
     args = request.get_json()
     label = args.get('label')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         inst = create_coupled(label)
         save_onto()
         return jsonify(inst), 201
@@ -49,7 +49,7 @@ def api_copy_instance_recursively():
         recursive = False
         
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         inst = copy_instance_recursively(inst, parent, data, depth, recursive)
         save_onto()
         return jsonify(inst), 201
@@ -64,7 +64,7 @@ def api_copy_instance():
     parent = args.get('parent')
     data = args.get('data')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         new_inst = copy_instance(inst, parent, data)
         save_onto()
         return jsonify(new_inst), 201
@@ -79,7 +79,7 @@ def api_create_instance():
     parent = args.get('parent')
     data = args.get('data')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         inst = create_instance(prop, parent, data)
         save_onto()
         return jsonify(inst), 201
@@ -101,7 +101,7 @@ def api_get_instance_properties_recursively():
         recursive = False
         
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         props = get_instance_properties_recursively(inst, depth, recursive)
         return jsonify(props), 200
     except Exception as e:
@@ -114,7 +114,7 @@ def api_replace_values():
     inst = args.get('instance')
     data = args.get('data')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         replace_values(inst, data)
         save_onto()
         return jsonify(''), 201
@@ -128,7 +128,7 @@ def api_delete_values():
     inst = args.get('instance')
     props = args.get('properties')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         delete_values(inst, props)
         save_onto()
         return jsonify(''), 201
@@ -142,7 +142,7 @@ def api_add_values():
     inst = args.get('instance')
     data = args.get('data')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         add_values(inst, data)
         save_onto()
         return jsonify(''), 201
@@ -156,7 +156,7 @@ def api_replace_properties():
     inst = args.get('instance')
     data = args.get('data')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         replace_properties(inst, data)
         save_onto()
         return jsonify(''), 201
@@ -169,7 +169,7 @@ def api_infer_coupled_structure():
     args = request.get_json()
     inst = args.get('coupled_system')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         infer_coupled_system_structure(inst)
         save_onto()
         return jsonify(''), 201
@@ -182,7 +182,7 @@ def api_export_coupled_kratos():
     args = request.get_json()
     inst = args.get('coupled_system')
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         export = export_coupled_kratos(inst)
         return jsonify(export), 201
     except Exception as e:
@@ -201,7 +201,7 @@ def api_save_onto():
 @app.route('/api/v1.0/save_locally/', methods=['GET'])
 def api_save_locally():
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         save_locally()
         return send_file(get_onto_path()), 200
     except Exception as e:
@@ -230,7 +230,7 @@ def api_get_class_properties_recursively():
     else:
         recursive = False
     try:
-        load_before_mutate()
+        reload_ontology_from_graphdb()
         props = get_class_properties_recursively(cl, depth, recursive)
         return jsonify(props), 200
     except Exception as e:

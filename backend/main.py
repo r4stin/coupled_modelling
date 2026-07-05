@@ -7,7 +7,15 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 
 GRAPHDB_URL = os.getenv("GRAPHDB_URL", "http://localhost:7200")
-REPOSITORY = "coupled_modelling"
+REPOSITORY = os.getenv("GRAPHDB_REPOSITORY", "coupled_modelling")
+GRAPHDB_USER = os.getenv("GRAPHDB_USER")
+GRAPHDB_PASSWORD = os.getenv("GRAPHDB_PASSWORD")
+
+
+def get_graphdb_auth():
+    if GRAPHDB_USER and GRAPHDB_PASSWORD:
+        return (GRAPHDB_USER, GRAPHDB_PASSWORD)
+    return None
 
 
 def get_onto_path():
@@ -44,10 +52,56 @@ def query_graphdb(sparql_query):
         "Accept": "application/sparql-results+json",
         "Content-Type": "application/sparql-query"
     }
-    response = requests.post(url, data=sparql_query, headers=headers)
+    response = requests.post(url, data=sparql_query, headers=headers, auth=get_graphdb_auth())
     if response.status_code != 200:
         raise Exception(f"GraphDB SPARQL query failed with status code {response.status_code}: {response.text}")
     return response.json()
+
+
+def sparql_update(sparql_query):
+    """
+    Executes a SPARQL update statement against the GraphDB repository.
+    """
+    url = f"{GRAPHDB_URL}/repositories/{REPOSITORY}/statements"
+    headers = {
+        "Content-Type": "application/sparql-update"
+    }
+    response = requests.post(url, data=sparql_query, headers=headers, auth=get_graphdb_auth())
+    if response.status_code not in (200, 204):
+        raise Exception(f"SPARQL update failed with status code {response.status_code}: {response.text}")
+
+
+def validate_local_name(name):
+    """Validates that a local name is safe for use in IRIs."""
+    if not name or not all(c.isalnum() or c in ('_', '-', '.') for c in name):
+        raise ValueError(f"Invalid local name: {name}")
+
+
+def serialize_iri(local_name):
+    """Validates and wraps a local name as a full IRI."""
+    validate_local_name(local_name)
+    return f"<http://coupled_modelling.owl#{local_name}>"
+
+
+def serialize_literal(value):
+    """Serializes a Python value into a properly typed SPARQL literal."""
+    if isinstance(value, bool):
+        return f'"{str(value).lower()}"^^xsd:boolean'
+    elif isinstance(value, int):
+        return f'"{value}"^^xsd:integer'
+    elif isinstance(value, float):
+        return f'"{value}"^^xsd:double'
+    elif isinstance(value, str):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"^^xsd:string'
+    raise ValueError(f"Unsupported literal type: {type(value)}")
+
+
+def serialize_object(value):
+    """Dispatches to IRI or literal serialization based on type."""
+    if isinstance(value, str) and value.startswith("instance"):
+        return serialize_iri(value)
+    return serialize_literal(value)
 
 
 def push_to_graphdb():
@@ -143,7 +197,7 @@ def pull_from_graphdb():
         return None
 
 
-def load_before_mutate():
+def reload_ontology_from_graphdb():
     global onto, default_world
     try:
         import owlready2
@@ -151,7 +205,7 @@ def load_before_mutate():
         default_world = owlready2.default_world
         onto = load_onto()
     except Exception as e:
-        print(f"Failed to load latest ontology before mutation: {e}")
+        print(f"Failed to load latest ontology from GraphDB: {e}")
 
 
 def new_onto():
