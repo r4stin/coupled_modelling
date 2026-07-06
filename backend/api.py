@@ -114,12 +114,14 @@ def api_replace_values():
     inst = args.get('instance')
     data = args.get('data')
     try:
-        reload_ontology_from_graphdb()
-        replace_values(inst, data)
-        save_onto()
+        replace_values_sparql(inst, data)
         return jsonify(''), 201
-    except Exception as e:
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
         return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
 
 
 @app.route('/api/v1.0/delete_values/', methods=['POST'])
@@ -128,12 +130,14 @@ def api_delete_values():
     inst = args.get('instance')
     props = args.get('properties')
     try:
-        reload_ontology_from_graphdb()
-        delete_values(inst, props)
-        save_onto()
+        delete_values_sparql(inst, props)
         return jsonify(''), 201
-    except Exception as e:
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
         return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
 
 
 @app.route('/api/v1.0/add_values/', methods=['POST'])
@@ -142,12 +146,14 @@ def api_add_values():
     inst = args.get('instance')
     data = args.get('data')
     try:
-        reload_ontology_from_graphdb()
-        add_values(inst, data)
-        save_onto()
+        add_values_sparql(inst, data)
         return jsonify(''), 201
-    except Exception as e:
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
         return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
 
 
 @app.route('/api/v1.0/replace_properties/', methods=['POST'])
@@ -156,12 +162,14 @@ def api_replace_properties():
     inst = args.get('instance')
     data = args.get('data')
     try:
-        reload_ontology_from_graphdb()
-        replace_properties(inst, data)
-        save_onto()
+        replace_properties_sparql(inst, data)
         return jsonify(''), 201
-    except Exception as e:
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
         return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
 
 
 @app.route('/api/v1.0/infer_coupled_structure/', methods=['POST'])
