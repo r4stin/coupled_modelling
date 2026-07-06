@@ -12,6 +12,11 @@ GRAPHDB_USER = os.getenv("GRAPHDB_USER")
 GRAPHDB_PASSWORD = os.getenv("GRAPHDB_PASSWORD")
 
 
+class GraphDBError(RuntimeError):
+    """Raised when communication with GraphDB fails."""
+    pass
+
+
 def get_graphdb_auth():
     if GRAPHDB_USER and GRAPHDB_PASSWORD:
         return (GRAPHDB_USER, GRAPHDB_PASSWORD)
@@ -31,7 +36,7 @@ def get_db_path():
 
 
 def get_uri(name):
-    if name.startswith("http://") or name.startswith("https://"):
+    if name.startswith('http'):
         return name
     return f"http://coupled_modelling.owl#{name}"
 
@@ -52,9 +57,13 @@ def query_graphdb(sparql_query):
         "Accept": "application/sparql-results+json",
         "Content-Type": "application/sparql-query"
     }
-    response = requests.post(url, data=sparql_query, headers=headers, auth=get_graphdb_auth())
+    try:
+        response = requests.post(url, data=sparql_query, headers=headers, auth=get_graphdb_auth())
+    except Exception as conn_err:
+        raise GraphDBError(f"Connection to GraphDB failed: {conn_err}") from conn_err
+
     if response.status_code != 200:
-        raise Exception(f"GraphDB SPARQL query failed with status code {response.status_code}: {response.text}")
+        raise GraphDBError(f"GraphDB SPARQL query failed with status code {response.status_code}: {response.text}")
     return response.json()
 
 
@@ -66,9 +75,13 @@ def sparql_update(sparql_query):
     headers = {
         "Content-Type": "application/sparql-update"
     }
-    response = requests.post(url, data=sparql_query, headers=headers, auth=get_graphdb_auth())
+    try:
+        response = requests.post(url, data=sparql_query, headers=headers, auth=get_graphdb_auth())
+    except Exception as conn_err:
+        raise GraphDBError(f"Connection to GraphDB failed: {conn_err}") from conn_err
+
     if response.status_code not in (200, 204):
-        raise Exception(f"SPARQL update failed with status code {response.status_code}: {response.text}")
+        raise GraphDBError(f"SPARQL update failed with status code {response.status_code}: {response.text}")
 
 
 def validate_local_name(name):
@@ -92,7 +105,14 @@ def serialize_literal(value):
     elif isinstance(value, float):
         return f'"{value}"^^xsd:double'
     elif isinstance(value, str):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        escaped = (
+            value
+            .replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
         return f'"{escaped}"^^xsd:string'
     raise ValueError(f"Unsupported literal type: {type(value)}")
 
@@ -121,7 +141,7 @@ def push_to_graphdb():
         url = f"{GRAPHDB_URL}/repositories/{REPOSITORY}/statements"
         headers = {"Content-Type": "application/rdf+xml"}
         params = {"context": f"<{onto_uri}>"}
-        response = requests.put(url, data=data, headers=headers, params=params)
+        response = requests.put(url, data=data, headers=headers, params=params, auth=get_graphdb_auth())
         if response.status_code not in [200, 204]:
             print(f"Failed to push to GraphDB: {response.status_code} - {response.text}")
         else:
@@ -163,7 +183,7 @@ def push_to_graphdb():
                     }}
                 }}
                 """
-                update_res = requests.post(update_url, data=update_query, headers=update_headers)
+                update_res = requests.post(update_url, data=update_query, headers=update_headers, auth=get_graphdb_auth())
                 if update_res.status_code not in [200, 204]:
                     print(f"Failed to run GraphDB namespace rewrite: {update_res.status_code} - {update_res.text}")
                 else:
@@ -180,7 +200,7 @@ def pull_from_graphdb():
     headers = {"Accept": "application/rdf+xml"}
     params = {"context": f"<{onto_uri}>", "infer": "false"}
     try:
-        response = requests.get(url, headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params, auth=get_graphdb_auth())
         if response.status_code == 200:
             content = response.content
             if b"rdf:about" in content or b"rdf:Description" in content:
@@ -691,6 +711,51 @@ def get_values(subj, prop):
     return res
 
     
+def serialize_subject(subj):
+    if isinstance(subj, str) and (subj.startswith("http://") or subj.startswith("https://")):
+        if any(char in subj for char in '<>"\' {}^`\n\r\t'):
+            raise ValueError(f"Invalid characters in subject URI: {subj}")
+        return f"<{subj}>"
+    if hasattr(subj, "name"):
+        return serialize_iri(subj.name)
+    return serialize_iri(subj)
+
+
+def get_property_iri(prop_name):
+    if prop_name == 'label':
+        return "<http://www.w3.org/2000/01/rdf-schema#label>"
+    return serialize_iri(f"has_{prop_name}")
+
+
+def instance_exists(name):
+    instance_iri = serialize_iri(name)
+    query = f"""
+    ASK {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {instance_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type .
+        }}
+    }}
+    """
+    res = query_graphdb(query)
+    return res.get("boolean", False)
+
+
+def validate_subject_exists(subj):
+    subj_iri = serialize_subject(subj)
+    query = f"""
+    ASK {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {subj_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type .
+        }}
+    }}
+    """
+    res = query_graphdb(query)
+    if not res.get("boolean", False):
+        raise ValueError(f"Subject instance {subj} does not exist in GraphDB.")
+
+
+# --- Owlready2 Mutation Helpers ---
+# Used by ontology construction, inference, creation, and copy workflows
 def add_value(subj, prop_name, value=None):
     """
     Adds a value to the given subject and property.
@@ -785,6 +850,246 @@ def replace_properties(inst_name, data):
         delete_value(inst_name, prop)
     for prop, value in data.items():
         add_value(inst_name, prop, value)
+
+
+# --- New Direct SPARQL Mutation Helpers ---
+
+def add_value_sparql(subj, prop_name, value=None):
+    validate_subject_exists(subj)
+    
+    values = value if isinstance(value, list) else [value]
+    
+    # Validate each item
+    for val in values:
+        if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
+            raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+        if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
+            raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
+            
+    subj_iri = serialize_subject(subj)
+    pred_iri = get_property_iri(prop_name)
+    
+    triples = []
+    for val in values:
+        if val is not None:
+            obj_val = serialize_object(val)
+            triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
+            
+    if triples:
+        query = f"""
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        INSERT DATA {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(triples)}
+            }}
+        }}
+        """
+        sparql_update(query)
+    return value
+
+
+def delete_value_sparql(subj, prop_name, value=None):
+    # Idempotent delete on subject: no error raised if subject doesn't exist
+    subj_iri = serialize_subject(subj)
+    pred_iri = get_property_iri(prop_name)
+    
+    if value is not None:
+        values = value if isinstance(value, list) else [value]
+        triples = []
+        for val in values:
+            obj_val = serialize_object(val)
+            triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
+        if triples:
+            query = f"""
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            DELETE DATA {{
+                GRAPH <http://coupled_modelling.owl> {{
+                    {" ".join(triples)}
+                }}
+            }}
+            """
+            sparql_update(query)
+    else:
+        query = f"""
+        DELETE WHERE {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {subj_iri} {pred_iri} ?old_val .
+            }}
+        }}
+        """
+        sparql_update(query)
+
+
+def replace_values_sparql(subj, data):
+    validate_subject_exists(subj)
+    
+    # Upfront validation for all properties
+    for prop_name, value in data.items():
+        values = value if isinstance(value, list) else [value]
+        for val in values:
+            if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+            if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
+                raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
+                
+    subj_iri = serialize_subject(subj)
+    delete_triples = []
+    insert_triples = []
+    where_clauses = []
+    
+    for idx, (prop_name, value) in enumerate(data.items()):
+        pred_iri = get_property_iri(prop_name)
+        values = value if isinstance(value, list) else [value]
+        
+        var_name = f"old_{idx}"
+        delete_triples.append(f"{subj_iri} {pred_iri} ?{var_name} .")
+        where_clauses.append(f"OPTIONAL {{ {subj_iri} {pred_iri} ?{var_name} . }}")
+        
+        for val in values:
+            if val is not None:
+                obj_val = serialize_object(val)
+                insert_triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
+                
+    if insert_triples:
+        query = f"""
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        DELETE {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(delete_triples)}
+            }}
+        }}
+        INSERT {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(insert_triples)}
+            }}
+        }}
+        WHERE {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(where_clauses)}
+            }}
+        }}
+        """
+    else:
+        query = f"""
+        DELETE {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(delete_triples)}
+            }}
+        }}
+        WHERE {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(where_clauses)}
+            }}
+        }}
+        """
+    sparql_update(query)
+
+
+def delete_values_sparql(inst, props):
+    # Idempotent delete on subject: no error raised if subject doesn't exist
+    subj_iri = serialize_subject(inst)
+    operations = []
+    
+    for idx, prop_name in enumerate(props):
+        pred_iri = get_property_iri(prop_name)
+        operations.append(f"""
+        DELETE WHERE {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {subj_iri} {pred_iri} ?old_{idx} .
+            }}
+        }}
+        """)
+        
+    query = " ; ".join(operations)
+    sparql_update(query)
+
+
+def add_values_sparql(inst, data):
+    validate_subject_exists(inst)
+    
+    # Upfront validation for all properties
+    for prop_name, value in data.items():
+        values = value if isinstance(value, list) else [value]
+        for val in values:
+            if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+            if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
+                raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
+                
+    subj_iri = serialize_subject(inst)
+    triples = []
+    
+    for prop_name, value in data.items():
+        pred_iri = get_property_iri(prop_name)
+        values = value if isinstance(value, list) else [value]
+        for val in values:
+            if val is not None:
+                obj_val = serialize_object(val)
+                triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
+        
+    if triples:
+        query = f"""
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        INSERT DATA {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(triples)}
+            }}
+        }}
+        """
+        sparql_update(query)
+
+
+def replace_properties_sparql(inst_name, data):
+    validate_subject_exists(inst_name)
+    
+    # Upfront validation for all properties
+    for prop_name, value in data.items():
+        values = value if isinstance(value, list) else [value]
+        for val in values:
+            if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+            if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
+                raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
+                
+    subj_iri = serialize_subject(inst_name)
+    insert_triples = []
+    
+    for prop_name, value in data.items():
+        pred_iri = get_property_iri(prop_name)
+        values = value if isinstance(value, list) else [value]
+        for val in values:
+            if val is not None:
+                obj_val = serialize_object(val)
+                insert_triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
+        
+    query = f"""
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+    DELETE {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {subj_iri} ?p ?o .
+        }}
+    }}
+    WHERE {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {subj_iri} ?p ?o .
+            FILTER(
+                STRSTARTS(STR(?p), "http://coupled_modelling.owl#has_")
+                || ?p = rdfs:label
+            )
+        }}
+    }}
+    """
+    if insert_triples:
+        query += f""" ;
+        INSERT DATA {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {" ".join(insert_triples)}
+            }}
+        }}
+        """
+    sparql_update(query)
 
 
 def get_instance_properties_recursively(inst_name, depth=1, recursive=False):
