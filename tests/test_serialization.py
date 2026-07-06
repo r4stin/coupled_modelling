@@ -50,6 +50,10 @@ class TestSerialization(unittest.TestCase):
         # Backslash and quote escaping
         self.assertEqual(serialize_literal('solver "A"'), '"solver \\"A\\""^^xsd:string')
         self.assertEqual(serialize_literal('path\\to\\file'), '"path\\\\to\\\\file"^^xsd:string')
+        # Control characters escaping
+        self.assertEqual(serialize_literal("line1\nline2"), '"line1\\nline2"^^xsd:string')
+        self.assertEqual(serialize_literal("cr\rrt"), '"cr\\rrt"^^xsd:string')
+        self.assertEqual(serialize_literal("tab\tspace"), '"tab\\tspace"^^xsd:string')
 
     def test_serialize_literal_unsupported(self):
         with self.assertRaises(ValueError):
