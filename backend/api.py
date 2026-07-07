@@ -79,12 +79,14 @@ def api_create_instance():
     parent = args.get('parent')
     data = args.get('data')
     try:
-        reload_ontology_from_graphdb()
-        inst = create_instance(prop, parent, data)
-        save_onto()
+        inst = create_instance_sparql(prop, parent, data)
         return jsonify(inst), 201
-    except Exception as e:
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
         return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
 
 
 @app.route('/api/v1.0/get_instance_properties_recursively/', methods=['GET'])
