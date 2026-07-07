@@ -166,12 +166,12 @@ class TestSparqlMutations(unittest.TestCase):
             main.add_value_sparql(self.test_subj, "parallel_type", "instance_non_existent_ref")
         self.assertIn("does not exist in GraphDB", str(ctx.exception))
 
-    def test_add_value_reject_creation(self):
-        with self.assertRaises(ValueError):
-            main.add_value_sparql(self.test_subj, "solver_settings", None)
-
-        with self.assertRaises(ValueError):
-            main.add_value_sparql(self.test_subj, "solver_settings", "new_unlabelled_instance")
+    def test_add_value_creation_supported(self):
+        new_inst = main.add_value_sparql(self.test_subj, "solver_settings", None)
+        self.assertTrue(new_inst.startswith("instance_"))
+        
+        new_inst_labeled = main.add_value_sparql(self.test_subj, "solver_settings", "new_unlabelled_instance")
+        self.assertTrue(new_inst_labeled.startswith("instance_"))
 
     def test_delete_value(self):
         main.add_value_sparql(self.test_subj, "print_colors", True)
