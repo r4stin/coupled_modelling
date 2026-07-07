@@ -343,7 +343,10 @@ def get_property(name, functional = False):
         return prop
 
 
-def instance_name():
+def instance_name(use_uuid=True):
+    if use_uuid:
+        import uuid
+        return f"instance_{uuid.uuid4()}"
     n = len(list(onto.individuals())) + 1
     return f'instance_{n}'
 
@@ -357,7 +360,7 @@ def has_only_label(inst):
 def dict_to_inst(inst, pred_name, data, functional=False):
     obj_cl = get_class(pred_name)
     rel = get_relation(pred_name, functional)
-    obj_inst = obj_cl(instance_name())
+    obj_inst = obj_cl(instance_name(use_uuid=False))
     for inst_pred_name, inst_obj_data in data.items():
         obj_inst = add_coupled_system(obj_inst, inst_pred_name, inst_obj_data)
         if obj_inst not in rel[inst]:
@@ -378,7 +381,7 @@ def str_to_inst(inst, pred_name, label, functional=False):
         if not obj_cl in obj_inst.is_a:
             obj_inst.is_a.append(obj_cl)
     else:
-        obj_inst = obj_cl(instance_name())
+        obj_inst = obj_cl(instance_name(use_uuid=False))
         obj_inst.label = [label]
     if obj_inst not in rel[inst]:
         print('str', inst, rel, obj_inst)
@@ -411,7 +414,7 @@ def add_coupled_system(inst, pred_name, obj_data):
                 #    if not obj_cl in obj_inst.is_a:
                 #        obj_inst.is_a.append(obj_cl)
                 #else:
-                obj_inst = obj_cl(instance_name())
+                obj_inst = obj_cl(instance_name(use_uuid=False))
                 obj_inst.label = obj_key
                 for inst_pred_name, inst_obj_data in obj_value.items():
                     obj_inst = add_coupled_system(obj_inst, inst_pred_name, inst_obj_data)
@@ -448,7 +451,7 @@ def create_coupled(label):
     """
     with onto:
         coupled_system = get_class('coupled_system')
-        inst = coupled_system(instance_name())
+        inst = coupled_system(instance_name(use_uuid=False))
         inst.label = label
     return inst.name
 
@@ -754,6 +757,98 @@ def validate_subject_exists(subj):
         raise ValueError(f"Subject instance {subj} does not exist in GraphDB.")
 
 
+def validate_class_exists_in_graphdb(class_name):
+    class_iri = serialize_iri(class_name)
+    query = f"""
+    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+    ASK {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {class_iri} a owl:Class .
+        }}
+    }}
+    """
+    res = query_graphdb(query)
+    if not res.get("boolean", False):
+        raise ValueError(f"Class {class_name} does not exist in GraphDB.")
+
+
+def is_object_property_in_graphdb(prop_name):
+    try:
+        prop_iri = serialize_iri(f"has_{prop_name}")
+        class_iri = serialize_iri(prop_name)
+    except ValueError:
+        return False
+        
+    query = f"""
+    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+    ASK {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {{ {prop_iri} a owl:ObjectProperty . }}
+            UNION
+            {{ {class_iri} a owl:Class . }}
+        }}
+    }}
+    """
+    res = query_graphdb(query)
+    return res.get("boolean", False)
+
+
+def resolve_instance_by_label(class_label, label):
+    validate_class_exists_in_graphdb(class_label)
+    class_iri = serialize_iri(class_label)
+    label_literal = serialize_literal(label)
+    query = f"""
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    SELECT ?inst WHERE {{
+        GRAPH <http://coupled_modelling.owl> {{
+            ?inst rdf:type {class_iri} .
+            ?inst rdfs:label {label_literal} .
+        }}
+    }}
+    LIMIT 1
+    """
+    res = query_graphdb(query)
+    bindings = res.get("results", {}).get("bindings", [])
+    if bindings:
+        inst_iri = bindings[0]["inst"]["value"]
+        return get_local_name(inst_iri)
+    return None
+
+
+def resolve_or_create_instance_by_label(class_label, label):
+    existing = resolve_instance_by_label(class_label, label)
+    if existing:
+        return existing
+        
+    validate_class_exists_in_graphdb(class_label)
+    class_iri = serialize_iri(class_label)
+    label_literal = serialize_literal(label)
+    new_ref_name = instance_name(use_uuid=True)
+    new_ref_iri = serialize_iri(new_ref_name)
+    
+    create_query = f"""
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    INSERT DATA {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {new_ref_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> {class_iri} .
+            {new_ref_iri} rdfs:label {label_literal} .
+        }}
+    }}
+    """
+    sparql_update(create_query)
+    return new_ref_name
+
+
+def resolve_val_sparql(prop_name, val):
+    if val is None:
+        return None
+    if isinstance(val, str) and not val.startswith("instance") and prop_name != "label":
+        if is_object_property_in_graphdb(prop_name):
+            return resolve_or_create_instance_by_label(prop_name, val)
+    return val
+
+
 # --- Owlready2 Mutation Helpers ---
 # Used by ontology construction, inference, creation, and copy workflows
 def add_value(subj, prop_name, value=None):
@@ -779,7 +874,7 @@ def add_value(subj, prop_name, value=None):
     if value == None:
         cl = get_class(prop_name)
         with onto:
-            value = cl(instance_name())
+            value = cl(instance_name(use_uuid=False))
         prop = get_relation(prop_name)
         prop[subj].append(value)
     elif type(value) == str and not value.startswith('http'):
@@ -857,12 +952,34 @@ def replace_properties(inst_name, data):
 def add_value_sparql(subj, prop_name, value=None):
     validate_subject_exists(subj)
     
+    if value is None:
+        validate_class_exists_in_graphdb(prop_name)
+        new_inst_name = instance_name(use_uuid=True)
+        new_inst_iri = serialize_iri(new_inst_name)
+        class_iri = serialize_iri(prop_name)
+        
+        subj_iri = serialize_subject(subj)
+        pred_iri = get_property_iri(prop_name)
+        
+        query = f"""
+        INSERT DATA {{
+            GRAPH <http://coupled_modelling.owl> {{
+                {new_inst_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> {class_iri} .
+                {subj_iri} {pred_iri} {new_inst_iri} .
+            }}
+        }}
+        """
+        sparql_update(query)
+        return new_inst_name
+
     values = value if isinstance(value, list) else [value]
+    resolved_values = [resolve_val_sparql(prop_name, val) for val in values]
     
     # Validate each item
-    for val in values:
+    for val in resolved_values:
         if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-            raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+            if is_object_property_in_graphdb(prop_name):
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
         if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
             raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
             
@@ -870,7 +987,7 @@ def add_value_sparql(subj, prop_name, value=None):
     pred_iri = get_property_iri(prop_name)
     
     triples = []
-    for val in values:
+    for val in resolved_values:
         if val is not None:
             obj_val = serialize_object(val)
             triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
@@ -885,7 +1002,7 @@ def add_value_sparql(subj, prop_name, value=None):
         }}
         """
         sparql_update(query)
-    return value
+    return resolved_values if isinstance(value, list) else resolved_values[0]
 
 
 def delete_value_sparql(subj, prop_name, value=None):
@@ -921,6 +1038,12 @@ def delete_value_sparql(subj, prop_name, value=None):
 
 
 def replace_values_sparql(subj, data):
+    """
+    Replaces all values of the property with the specified new value for each key-value pair in data.
+    
+    Note: Direct implicit creation is currently supported through add_value_sparql() 
+    and create_instance_sparql(), not this batch replacement API.
+    """
     validate_subject_exists(subj)
     
     # Upfront validation for all properties
@@ -928,7 +1051,7 @@ def replace_values_sparql(subj, data):
         values = value if isinstance(value, list) else [value]
         for val in values:
             if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
             if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
                 raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
                 
@@ -1005,6 +1128,12 @@ def delete_values_sparql(inst, props):
 
 
 def add_values_sparql(inst, data):
+    """
+    Adds values to the given subject instance from a dictionary of property-value pairs.
+    
+    Note: Direct implicit creation is currently supported through add_value_sparql() 
+    and create_instance_sparql(), not this batch replacement API.
+    """
     validate_subject_exists(inst)
     
     # Upfront validation for all properties
@@ -1012,7 +1141,7 @@ def add_values_sparql(inst, data):
         values = value if isinstance(value, list) else [value]
         for val in values:
             if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
             if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
                 raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
                 
@@ -1040,6 +1169,12 @@ def add_values_sparql(inst, data):
 
 
 def replace_properties_sparql(inst_name, data):
+    """
+    Replaces properties of the given instance.
+    
+    Note: Direct implicit creation is currently supported through add_value_sparql() 
+    and create_instance_sparql(), not this batch replacement API.
+    """
     validate_subject_exists(inst_name)
     
     # Upfront validation for all properties
@@ -1047,7 +1182,7 @@ def replace_properties_sparql(inst_name, data):
         values = value if isinstance(value, list) else [value]
         for val in values:
             if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2.")
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
             if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
                 raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
                 
@@ -1090,6 +1225,64 @@ def replace_properties_sparql(inst_name, data):
         }}
         """
     sparql_update(query)
+
+
+def create_instance_sparql(prop_name, parent, data=None):
+    validate_subject_exists(parent)
+    validate_class_exists_in_graphdb(prop_name)
+    
+    # Generate UUID for the new instance
+    new_inst_name = instance_name(use_uuid=True)
+    new_inst_iri = serialize_iri(new_inst_name)
+    
+    # Retrieve range class of the property
+    class_iri = serialize_iri(prop_name)
+    
+    parent_iri = serialize_subject(parent)
+    pred_iri = get_property_iri(prop_name)
+    
+    triples = [
+        f"{new_inst_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> {class_iri} .",
+        f"{parent_iri} {pred_iri} {new_inst_iri} ."
+    ]
+    
+    if data:
+        # Preprocess / resolve labels to object references
+        resolved_data = {}
+        for prop, val in data.items():
+            if isinstance(val, list):
+                resolved_data[prop] = [resolve_val_sparql(prop, v) for v in val]
+            else:
+                resolved_data[prop] = resolve_val_sparql(prop, val)
+                
+        # Upfront validation for data properties
+        for prop, val in resolved_data.items():
+            values = val if isinstance(val, list) else [val]
+            for v in values:
+                if v is None or (isinstance(v, str) and not v.startswith("instance") and prop != "label"):
+                    if is_object_property_in_graphdb(prop):
+                        raise ValueError("Creation of nested individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
+                if isinstance(v, str) and v.startswith("instance") and not instance_exists(v):
+                    raise ValueError(f"Referenced instance {v} does not exist in GraphDB.")
+                    
+        for prop, val in resolved_data.items():
+            p_iri = get_property_iri(prop)
+            values = val if isinstance(val, list) else [val]
+            for v in values:
+                if v is not None:
+                    obj_val = serialize_object(v)
+                    triples.append(f"{new_inst_iri} {p_iri} {obj_val} .")
+                    
+    query = f"""
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+    INSERT DATA {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {" ".join(triples)}
+        }}
+    }}
+    """
+    sparql_update(query)
+    return new_inst_name
 
 
 def get_instance_properties_recursively(inst_name, depth=1, recursive=False):
@@ -1152,7 +1345,7 @@ def copy_instance(inst, parent=None, data=None):
     with onto:
         inst = onto[inst]
         cl = type(inst)
-        new_inst = cl(instance_name())
+        new_inst = cl(instance_name(use_uuid=False))
 
         if parent:
             parent = onto[parent]
