@@ -33,7 +33,25 @@ The application automatically configures itself, but you can override connection
 
 ---
 
-## 4. Initializing the Database & Running Demos
+## 4. Accessing the Web Explorer UI
+
+Once the Flask API server is running (started via `python backend/api.py`), you can access the read-only Knowledge Base Explorer:
+
+1. Open your web browser and navigate to:
+   `http://localhost:5000/`
+
+   ![Web Explorer Preview](docs/images/explorer_preview.png)
+
+2. **Features of the Web Explorer:**
+   * **Database Status Indicator (Top Bar):** Shows the real-time health of the GraphDB repository connection (Connected vs. Offline).
+   * **Class Hierarchy Pane (Left Column):** Explore the ontology schema class tree. Classes with multiple parents are rendered recursively under each parent branch, and chevrons can be clicked to expand or collapse child class nodes.
+   * **Grouped Instances Pane (Middle Column):** Displays instances belonging to the selected class. Instances are dynamically grouped by their direct leaf subclass types, displaying both their human-readable labels and unique identifiers. It includes a search filter box.
+   * **Instance Inspector Pane (Right Column):** Displays the selected instance's metadata, direct types, and property key-value grid table.
+   * **Semantic Navigation:** Linked object properties (displayed in green) act as clickable navigation links, letting you trace relationships through the graph interactively.
+
+---
+
+## 5. Initializing the Database & Running Demos
 
 Once the API server is active, populate the database with the core ontology schema and co-simulation instances:
 
@@ -51,7 +69,7 @@ Once the API server is active, populate the database with the core ontology sche
 
 ---
 
-## 5. Running the Test Suite
+## 6. Running the Test Suite
 
 After the database has been initialized with the base schema, you can run the test suite to verify the integrity of the RDF serialization and SPARQL update pathways. 
 
@@ -70,6 +88,6 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 
 ---
 
-## 6. Architecture: Hybrid Owlready2 + GraphDB
+## 7. Architecture: Hybrid Owlready2 + GraphDB
 * **Direct SPARQL mutations:** Simple value insertions, deletions, replacements, and instance creation using collision-resistant UUIDs run directly in GraphDB through SPARQL Update requests.
 * **In-memory Owlready2 workflows:** Copy operations, ontology construction, KRATOS import, and structural inference continue to use Owlready2 and synchronize the resulting ontology with GraphDB.
