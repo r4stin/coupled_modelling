@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aerospace KB Web Explorer</title>
+    <link class="stylesheet-ref" rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-logo">
+            <h1>Aerospace Knowledge Base</h1>
+        </div>
+        <div class="db-status-container">
+            <span class="status-label">Database Status:</span>
+            <span id="health-badge" class="badge badge-loading">Verifying Connection...</span>
+            <button id="refresh-health-btn" class="btn btn-small" title="Force health verification">&#x21bb;</button>
+        </div>
+    </header>
+
+    <main class="workspace-grid">
+        <!-- Sidebar Class Tree Explorer -->
+        <aside id="class-hierarchy" class="panel">
+            <div class="panel-header">
+                <h2>Class Hierarchy</h2>
+            </div>
+            <div class="panel-content scrollable">
+                <div id="class-tree" class="tree-root">
+                    <p class="status-msg">Loading class structure...</p>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Instance List Explorer -->
+        <section id="instance-list" class="panel">
+            <div class="panel-header">
+                <h2>Instances</h2>
+                <div class="filter-box">
+                    <input type="text" id="instance-search" placeholder="Search instances..." disabled>
+                </div>
+            </div>
+            <div class="panel-content scrollable">
+                <div class="active-class-indicator">
+                    <span>Active Class: </span><strong id="selected-class-name">None Selected</strong>
+                </div>
+                <ul id="instances-ul" class="item-list">
+                    <li class="status-msg">Select an ontology class to load instances</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Detailed Properties Inspector -->
+        <article id="instance-inspector" class="panel">
+            <div class="panel-header">
+                <h2>Instance Inspector</h2>
+            </div>
+            <div class="panel-content scrollable">
+                <div id="inspector-content">
+                    <div class="empty-state">
+                        <p class="status-msg">Select a specific instance to view its semantic property details</p>
+                    </div>
+                </div>
+            </div>
+        </article>
+    </main>
+
+    <footer class="app-footer">
+        <p>Stateless SPARQL Explorer &copy; 2026 Aerospace Knowledge Base.</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
