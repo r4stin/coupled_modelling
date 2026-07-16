@@ -1637,6 +1637,272 @@ def get_class_hierarchy():
                 res[cl.name] = [x.name for x in cl.subclasses()]
         return res
 
+def get_graphdb_health():
+    """
+    Checks the health of the GraphDB connection and repository.
+    Returns:
+        dict: A dictionary containing health details.
+    Raises:
+        GraphDBError: If the repository or GraphDB is offline.
+    """
+    query = "ASK { ?s ?p ?o }"
+    try:
+        query_graphdb(query)
+        return {
+            "status": "ok",
+            "graphdb": "connected",
+            "repository": REPOSITORY
+        }
+    except Exception as e:
+        if isinstance(e, GraphDBError):
+            raise
+        raise GraphDBError(f"Health check failed: {e}") from e
+
+
+def select_preferred_label(labels, fallback):
+    """
+    Sorts labels prioritizing English, then untagged, then other languages,
+    followed by case-insensitive lexical sorting.
+    """
+    if not labels:
+        return fallback
+    ordered = sorted(
+        labels,
+        key=lambda item: (
+            0 if item[0].lower() == "en" else
+            1 if item[0] == "" else
+            2,
+            item[0].lower(),
+            item[1].casefold()
+        )
+    )
+    return ordered[0][1]
+
+
+def get_class_hierarchy_metadata():
+    """
+    Returns the complete class list with parent arrays, filtered for project local classes.
+    """
+    query = f"""
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+    SELECT DISTINCT ?class ?parent WHERE {{
+        GRAPH <{onto_uri}> {{
+            ?class rdf:type owl:Class .
+            FILTER (STRSTARTS(STR(?class), "http://coupled_modelling.owl#"))
+            OPTIONAL {{
+                ?class rdfs:subClassOf ?parent .
+                FILTER (?parent != owl:Thing && ?parent != ?class && STRSTARTS(STR(?parent), "http://coupled_modelling.owl#"))
+            }}
+        }}
+    }}
+    """
+    res = query_graphdb(query)
+    class_parents = {}
+    for binding in res.get("results", {}).get("bindings", []):
+        class_name = get_local_name(binding["class"]["value"])
+        if class_name not in class_parents:
+            class_parents[class_name] = set()
+        if "parent" in binding:
+            parent_name = get_local_name(binding["parent"]["value"])
+            class_parents[class_name].add(parent_name)
+            
+    result = []
+    for cl_name, parents in class_parents.items():
+        result.append({
+            "class": cl_name,
+            "parents": sorted(list(parents))
+        })
+    result.sort(key=lambda x: x["class"])
+    return result
+
+
+def get_class_instance_summaries(class_name):
+    """
+    Returns instance summaries containing unique ID, label, and direct types list.
+    """
+    validate_class_exists_in_graphdb(class_name)
+    class_iri = get_uri(class_name)
+    query = f"""
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?inst ?label (LANG(?label) AS ?lang) ?type WHERE {{
+        GRAPH <{onto_uri}> {{
+            ?inst rdf:type/rdfs:subClassOf* <{class_iri}> .
+            ?inst rdf:type ?type .
+            FILTER (STRSTARTS(STR(?type), "http://coupled_modelling.owl#"))
+            OPTIONAL {{
+                ?inst rdfs:label ?label .
+            }}
+        }}
+    }}
+    """
+    res = query_graphdb(query)
+    inst_data = {}
+    for binding in res.get("results", {}).get("bindings", []):
+        inst_uri = binding["inst"]["value"]
+        inst_id = get_local_name(inst_uri)
+        type_uri = binding["type"]["value"]
+        type_name = get_local_name(type_uri)
+        
+        if inst_id not in inst_data:
+            inst_data[inst_id] = {
+                "labels": [],
+                "types": set()
+            }
+        
+        inst_data[inst_id]["types"].add(type_name)
+        if "label" in binding:
+            lang = binding.get("lang", {}).get("value", "")
+            val = binding["label"]["value"]
+            inst_data[inst_id]["labels"].append((lang, val))
+            
+    summaries = []
+    for inst_id, data in inst_data.items():
+        selected_label = select_preferred_label(data["labels"], inst_id)
+        summaries.append({
+            "id": inst_id,
+            "label": selected_label,
+            "types": sorted(list(data["types"]))
+        })
+    summaries.sort(key=lambda x: x["label"])
+    return summaries
+
+
+def get_instance_property_metadata(inst_name):
+    """
+    Retrieves direct outgoing statements for a selected instance with type metadata.
+    """
+    validate_subject_exists(inst_name)
+    inst_uri = get_uri(inst_name)
+    
+    q1 = f"""
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?label (LANG(?label) AS ?lang) ?type WHERE {{
+        GRAPH <{onto_uri}> {{
+            <{inst_uri}> rdf:type ?type .
+            OPTIONAL {{
+                <{inst_uri}> rdfs:label ?label .
+            }}
+        }}
+    }}
+    """
+    
+    q2 = f"""
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?prop ?obj ?obj_label (LANG(?obj_label) AS ?obj_lang) WHERE {{
+        GRAPH <{onto_uri}> {{
+            <{inst_uri}> ?prop ?obj .
+            FILTER (?prop != rdf:type)
+            OPTIONAL {{
+                FILTER(isIRI(?obj))
+                ?obj rdfs:label ?obj_label .
+            }}
+        }}
+    }}
+    """
+    
+    r1 = query_graphdb(q1)
+    r2 = query_graphdb(q2)
+    
+    labels = []
+    types = set()
+    for binding in r1.get("results", {}).get("bindings", []):
+        if "label" in binding:
+            lang = binding.get("lang", {}).get("value", "")
+            val = binding["label"]["value"]
+            labels.append((lang, val))
+        if "type" in binding:
+            type_uri = binding["type"]["value"]
+            if type_uri.startswith("http://coupled_modelling.owl#"):
+                types.add(get_local_name(type_uri))
+                
+    resolved_label = select_preferred_label(labels, inst_name)
+    
+    prop_objects = {}
+    prop_literals = {}
+    
+    for binding in r2.get("results", {}).get("bindings", []):
+        prop_uri = binding["prop"]["value"]
+        prop_name = get_local_name(prop_uri).replace('has_', '')
+        
+        obj_binding = binding["obj"]
+        obj_type = obj_binding.get("type")
+        obj_val = obj_binding["value"]
+        
+        if obj_type == "uri" and obj_val.startswith("http://coupled_modelling.owl#"):
+            obj_id = get_local_name(obj_val)
+            if prop_name not in prop_objects:
+                prop_objects[prop_name] = {}
+            if obj_id not in prop_objects[prop_name]:
+                prop_objects[prop_name][obj_id] = []
+            if "obj_label" in binding:
+                obj_lang = binding.get("obj_lang", {}).get("value", "")
+                obj_lbl = binding["obj_label"]["value"]
+                prop_objects[prop_name][obj_id].append((obj_lang, obj_lbl))
+        else:
+            datatype = "http://www.w3.org/2001/XMLSchema#anyURI" if obj_type == "uri" else obj_binding.get("datatype", "http://www.w3.org/2001/XMLSchema#string")
+            val = obj_val
+            if datatype == "http://www.w3.org/2001/XMLSchema#integer":
+                try:
+                    val = int(obj_val)
+                except ValueError:
+                    pass
+            elif datatype in ("http://www.w3.org/2001/XMLSchema#double", "http://www.w3.org/2001/XMLSchema#float"):
+                try:
+                    val = float(obj_val)
+                except ValueError:
+                    pass
+            elif datatype == "http://www.w3.org/2001/XMLSchema#boolean":
+                val = (obj_val.lower() == "true")
+            
+            literal_dict = {
+                "kind": "literal",
+                "value": val,
+                "datatype": datatype
+            }
+            if "xml:lang" in obj_binding:
+                literal_dict["language"] = obj_binding["xml:lang"]
+            if prop_name not in prop_literals:
+                prop_literals[prop_name] = []
+            prop_literals[prop_name].append(literal_dict)
+            
+    properties_map = {}
+    for prop_name, obj_dict in prop_objects.items():
+        if prop_name not in properties_map:
+            properties_map[prop_name] = []
+        for obj_id, labels_list in obj_dict.items():
+            selected_obj_lbl = select_preferred_label(labels_list, obj_id)
+            properties_map[prop_name].append({
+                "kind": "object",
+                "id": obj_id,
+                "label": selected_obj_lbl
+            })
+            
+    for prop_name, literal_list in prop_literals.items():
+        if prop_name not in properties_map:
+            properties_map[prop_name] = []
+        properties_map[prop_name].extend(literal_list)
+        
+    properties_list = []
+    for prop_name, values in properties_map.items():
+        values.sort(key=lambda x: str(x.get("label", x.get("value", ""))))
+        properties_list.append({
+            "property": prop_name,
+            "values": values
+        })
+    properties_list.sort(key=lambda x: x["property"])
+    
+    return {
+        "id": inst_name,
+        "label": resolved_label,
+        "types": sorted(list(types)),
+        "properties": properties_list
+    }
+
 
 onto_uri = 'http://coupled_modelling.owl'
 # default_world.set_backend(filename = get_db_path())

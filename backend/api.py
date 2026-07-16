@@ -4,6 +4,67 @@ from main import *
 
 app = Flask(__name__)
 
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/api/v1.0/health/', methods=['GET'])
+def api_health():
+    try:
+        health_data = get_graphdb_health()
+        return jsonify(health_data), 200
+    except GraphDBError as e:
+        return jsonify(status="error", graphdb="unavailable", repository=REPOSITORY, error=str(e)), 503
+    except Exception as e:
+        return jsonify(status="error", graphdb="unavailable", repository=REPOSITORY, error=str(e)), 500
+
+
+@app.route('/api/v1.0/get_class_hierarchy_metadata/', methods=['GET'])
+def api_get_class_hierarchy_metadata():
+    try:
+        hierarchy = get_class_hierarchy_metadata()
+        return jsonify(hierarchy), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route('/api/v1.0/get_class_instance_summaries/', methods=['GET'])
+def api_get_class_instance_summaries():
+    class_name = request.args.get('class')
+    if not class_name:
+        return jsonify(error="Missing required query parameter: class"), 400
+    try:
+        summaries = get_class_instance_summaries(class_name)
+        return jsonify(summaries), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route('/api/v1.0/get_instance_property_metadata/', methods=['GET'])
+def api_get_instance_property_metadata():
+    inst_name = request.args.get('instance')
+    if not inst_name:
+        return jsonify(error="Missing required query parameter: instance"), 400
+    try:
+        metadata = get_instance_property_metadata(inst_name)
+        return jsonify(metadata), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
 @app.route('/api/v1.0/import_coupled_kratos/', methods=['POST'])
 def api_import_coupled_kratos():
     args = request.get_json()
