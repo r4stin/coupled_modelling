@@ -124,6 +124,53 @@ def serialize_object(value):
     return serialize_literal(value)
 
 
+def escape_string_content(val):
+    return (
+        str(val)
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+
+
+def serialize_metadata_value(value_obj):
+    """Converts structured value metadata objects (from the frontend UI) into valid SPARQL terms."""
+    if not isinstance(value_obj, dict):
+        return serialize_object(value_obj)
+    
+    kind = value_obj.get("kind")
+    if kind == "object":
+        id_val = value_obj.get("id")
+        if not instance_exists(id_val):
+            raise ValueError(f"Referenced instance {id_val} does not exist in GraphDB.")
+        return serialize_iri(id_val)
+    
+    val = value_obj.get("value")
+    datatype = value_obj.get("datatype")
+    
+    if datatype:
+        if datatype == "http://www.w3.org/2001/XMLSchema#string":
+            return serialize_literal(str(val))
+        elif datatype == "http://www.w3.org/2001/XMLSchema#integer":
+            return f'"{int(val)}"^^<{datatype}>'
+        elif datatype in ["http://www.w3.org/2001/XMLSchema#double", "http://www.w3.org/2001/XMLSchema#decimal"]:
+            return f'"{float(val)}"^^<{datatype}>'
+        elif datatype == "http://www.w3.org/2001/XMLSchema#boolean":
+            if isinstance(val, str):
+                bool_val = val.strip().lower() in ("true", "1", "yes")
+            else:
+                bool_val = bool(val)
+            return f'"{str(bool_val).lower()}"^^<{datatype}>'
+        else:
+            escaped = escape_string_content(val)
+            return f'"{escaped}"^^<{datatype}>'
+            
+    return serialize_literal(val)
+
+
+
 def push_to_graphdb():
     """Exports the local ontology and pushes it to GraphDB via REST API replacing the named graph."""
     try:
@@ -979,7 +1026,7 @@ def add_value_sparql(subj, prop_name, value=None):
     for val in resolved_values:
         if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
             if is_object_property_in_graphdb(prop_name):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported except through explicit creation APIs.")
         if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
             raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
             
@@ -1006,26 +1053,38 @@ def add_value_sparql(subj, prop_name, value=None):
 
 
 def delete_value_sparql(subj, prop_name, value=None):
-    # Idempotent delete on subject: no error raised if subject doesn't exist
+    """Deletes a specific triple or all triples for a property on a subject."""
+    validate_subject_exists(subj)
     subj_iri = serialize_subject(subj)
     pred_iri = get_property_iri(prop_name)
     
     if value is not None:
-        values = value if isinstance(value, list) else [value]
-        triples = []
-        for val in values:
-            obj_val = serialize_object(val)
-            triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
-        if triples:
+        if isinstance(value, dict) and ("kind" in value or "value" in value or "id" in value):
+            obj_term = serialize_metadata_value(value)
             query = f"""
-            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
             DELETE DATA {{
                 GRAPH <http://coupled_modelling.owl> {{
-                    {" ".join(triples)}
+                    {subj_iri} {pred_iri} {obj_term} .
                 }}
             }}
             """
             sparql_update(query)
+        else:
+            values = value if isinstance(value, list) else [value]
+            triples = []
+            for val in values:
+                obj_val = serialize_object(val)
+                triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
+            if triples:
+                query = f"""
+                PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+                DELETE DATA {{
+                    GRAPH <http://coupled_modelling.owl> {{
+                        {" ".join(triples)}
+                    }}
+                }}
+                """
+                sparql_update(query)
     else:
         query = f"""
         DELETE WHERE {{
@@ -1035,6 +1094,7 @@ def delete_value_sparql(subj, prop_name, value=None):
         }}
         """
         sparql_update(query)
+
 
 
 def replace_values_sparql(subj, data):
@@ -1051,7 +1111,7 @@ def replace_values_sparql(subj, data):
         values = value if isinstance(value, list) else [value]
         for val in values:
             if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported except through explicit creation APIs.")
             if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
                 raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
                 
@@ -1141,7 +1201,7 @@ def add_values_sparql(inst, data):
         values = value if isinstance(value, list) else [value]
         for val in values:
             if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported except through explicit creation APIs.")
             if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
                 raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
                 
@@ -1182,7 +1242,7 @@ def replace_properties_sparql(inst_name, data):
         values = value if isinstance(value, list) else [value]
         for val in values:
             if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
+                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported except through explicit creation APIs.")
             if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
                 raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
                 
@@ -1261,7 +1321,7 @@ def create_instance_sparql(prop_name, parent, data=None):
             for v in values:
                 if v is None or (isinstance(v, str) and not v.startswith("instance") and prop != "label"):
                     if is_object_property_in_graphdb(prop):
-                        raise ValueError("Creation of nested individuals via direct SPARQL mutations is not supported in Milestone 2/3 except through explicit creation APIs.")
+                        raise ValueError("Creation of nested individuals via direct SPARQL mutations is not supported except through explicit creation APIs.")
                 if isinstance(v, str) and v.startswith("instance") and not instance_exists(v):
                     raise ValueError(f"Referenced instance {v} does not exist in GraphDB.")
                     
@@ -1283,6 +1343,26 @@ def create_instance_sparql(prop_name, parent, data=None):
     """
     sparql_update(query)
     return new_inst_name
+
+
+def create_class_instance_sparql(class_name, label):
+    """Creates a standalone class instance with rdfs:label in GraphDB."""
+    validate_class_exists_in_graphdb(class_name)
+    new_name = instance_name(use_uuid=True)
+    new_iri = serialize_iri(new_name)
+    class_iri = serialize_iri(class_name)
+    label_iri = get_property_iri("label")
+    label_lit = serialize_literal(label)
+    query = f"""
+    INSERT DATA {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {new_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> {class_iri} .
+            {new_iri} {label_iri} {label_lit} .
+        }}
+    }}
+    """
+    sparql_update(query)
+    return new_name
 
 
 def get_instance_properties_recursively(inst_name, depth=1, recursive=False):
@@ -1718,18 +1798,24 @@ def get_class_hierarchy_metadata():
     return result
 
 
-def get_class_instance_summaries(class_name):
+def get_class_instance_summaries(class_name=None):
     """
     Returns instance summaries containing unique ID, label, and direct types list.
+    If class_name is None, empty, or 'all', returns summaries for all instances in the ontology graph.
     """
-    validate_class_exists_in_graphdb(class_name)
-    class_iri = get_uri(class_name)
+    if class_name and str(class_name).strip() and str(class_name).strip().lower() != "all":
+        validate_class_exists_in_graphdb(class_name)
+        class_iri = get_uri(class_name)
+        class_triple = f"?inst rdf:type/rdfs:subClassOf* <{class_iri}> ."
+    else:
+        class_triple = ""
+
     query = f"""
     PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
     SELECT ?inst ?label (LANG(?label) AS ?lang) ?type WHERE {{
         GRAPH <{onto_uri}> {{
-            ?inst rdf:type/rdfs:subClassOf* <{class_iri}> .
+            {class_triple}
             ?inst rdf:type ?type .
             FILTER (STRSTARTS(STR(?type), "http://coupled_modelling.owl#"))
             OPTIONAL {{

@@ -37,8 +37,6 @@ def api_get_class_hierarchy_metadata():
 @app.route('/api/v1.0/get_class_instance_summaries/', methods=['GET'])
 def api_get_class_instance_summaries():
     class_name = request.args.get('class')
-    if not class_name:
-        return jsonify(error="Missing required query parameter: class"), 400
     try:
         summaries = get_class_instance_summaries(class_name)
         return jsonify(summaries), 200
@@ -317,6 +315,57 @@ def api_get_class_instances():
     except Exception as e:
         return jsonify(error=str(e)), 400
     
+
+@app.route('/api/v1.0/delete_value/', methods=['POST'])
+def api_delete_value():
+    args = request.get_json()
+    inst = args.get('instance')
+    prop = args.get('property')
+    value_obj = args.get('value')
+    
+    if not inst or not prop or value_obj is None:
+        return jsonify(error="instance, property, and value parameters are required"), 400
+        
+    try:
+        delete_value_sparql(inst, prop, value_obj)
+        return jsonify(''), 201
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route('/api/v1.0/create_class_instance/', methods=['POST'])
+def api_create_class_instance():
+    args = request.get_json()
+    class_name = args.get('class')
+    label = args.get('label')
+    
+    if not class_name or not label:
+        return jsonify(error="class and label parameters are required"), 400
+        
+    try:
+        new_name = create_class_instance_sparql(class_name, label)
+        return jsonify(new_name), 201
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route('/api/v1.0/download_owl/', methods=['GET'])
+def api_download_owl():
+    try:
+        reload_ontology_from_graphdb()
+        save_locally()
+        return send_file(get_onto_path(), as_attachment=True, mimetype="application/rdf+xml")
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
 
 if __name__ == "__main__":
     app.run()
