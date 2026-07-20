@@ -93,6 +93,14 @@ class TestWebExplorer(unittest.TestCase):
         response = self.app.get('/api/v1.0/get_class_instance_summaries/?class=coupled_system')
         self.assertEqual(response.status_code, 400)
 
+    @patch('api.get_class_instance_summaries')
+    def test_get_class_instance_summaries_optional_class(self, mock_helper):
+        """Verify get_class_instance_summaries succeeds with 200 when class param is omitted (global search)."""
+        mock_helper.return_value = [{"id": "instance_1", "label": "GlobalInst", "types": ["solver"]}]
+        response = self.app.get('/api/v1.0/get_class_instance_summaries/')
+        self.assertEqual(response.status_code, 200)
+        mock_helper.assert_called_with(None)
+
     @patch('api.get_instance_property_metadata')
     def test_get_instance_property_metadata_error_503(self, mock_helper):
         """Verify get_instance_property_metadata returns 503 on GraphDBError."""
