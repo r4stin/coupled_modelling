@@ -76,7 +76,7 @@ After the database has been initialized with the base schema, you can run the te
 To run the tests without namespace shadowing conflicts (e.g., from other global test libraries), run the following command:
 
 ```bash
-python -m unittest tests/test_serialization.py tests/test_sparql_mutations.py tests/test_sparql_creation.py -v
+PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
 The SPARQL integration tests require a running GraphDB instance and modify repository data. Use a dedicated test repository where possible.
@@ -85,6 +85,8 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 * `test_serialization.py`: Validates SPARQL/RDF term serialization and local resource name validation.
 * `test_sparql_mutations.py`: Tests the execution of SPARQL-based updates (inserting, deleting, and replacing properties on existing subjects).
 * `test_sparql_creation.py`: Tests direct instance instantiation, class validation against GraphDB, and safe prefix-isolated test teardowns.
+* `test_web_explorer.py`: Tests Flask routing contracts, health error mapping (503/400), tree inheritance parsing, and global search.
+* `test_web_mutations.py`: Tests web mutation endpoints (`/delete_value/`, `/create_class_instance/`, `/download_owl/`), boolean string parsing safety, and GraphDB error codes.
 
 ---
 
