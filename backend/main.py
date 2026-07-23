@@ -1800,16 +1800,16 @@ def get_class_hierarchy_metadata():
 
 def get_class_instance_summaries(class_name=None):
     """
-    Returns instance summaries containing unique ID, label, and direct types list.
-    If class_name is None, empty, or 'all', returns summaries for all instances in the ontology graph.
+    Returns instance summaries containing unique ID, label, and direct types list
+    for the specified class. If class_name is None or empty, returns summaries for all instances.
     """
-    if class_name and str(class_name).strip() and str(class_name).strip().lower() != "all":
+    if class_name and str(class_name).strip():
         validate_class_exists_in_graphdb(class_name)
         class_iri = get_uri(class_name)
         class_triple = f"?inst rdf:type/rdfs:subClassOf* <{class_iri}> ."
     else:
         class_triple = ""
-
+        
     query = f"""
     PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
     PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -1844,13 +1844,111 @@ def get_class_instance_summaries(class_name=None):
             val = binding["label"]["value"]
             inst_data[inst_id]["labels"].append((lang, val))
             
+    inst_candidates = {inst_id: [] for inst_id in inst_data.keys()}
+    if inst_data:
+        uris_str = " ".join(f"<{get_uri(inst_id)}>" for inst_id in inst_data.keys())
+        prop_query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT ?inst ?prop ?obj ?obj_label (LANG(?obj_label) AS ?obj_lang) WHERE {{
+            GRAPH <{onto_uri}> {{
+                VALUES ?inst {{ {uris_str} }}
+                ?inst ?prop ?obj .
+                FILTER (?prop != rdf:type && ?prop != rdfs:label)
+                OPTIONAL {{
+                    FILTER(isIRI(?obj))
+                    ?obj rdfs:label ?obj_label .
+                }}
+            }}
+        }}
+        """
+        prop_res = query_graphdb(prop_query)
+        inst_candidates_group = {inst_id: {} for inst_id in inst_data.keys()}
+        
+        for binding in prop_res.get("results", {}).get("bindings", []):
+            inst_uri = binding["inst"]["value"]
+            inst_id = get_local_name(inst_uri)
+            if inst_id not in inst_candidates_group:
+                continue
+                
+            prop_uri = binding["prop"]["value"]
+            prop_name = get_local_name(prop_uri)
+            if prop_name in ("type", "label"):
+                continue
+                
+            obj_binding = binding["obj"]
+            is_literal = (obj_binding.get("type") == "literal")
+            obj_val = obj_binding["value"]
+            
+            key = (prop_name, obj_val, is_literal)
+            if key not in inst_candidates_group[inst_id]:
+                inst_candidates_group[inst_id][key] = {
+                    "datatype": obj_binding.get("datatype", ""),
+                    "labels": []
+                }
+            if not is_literal and "obj_label" in binding:
+                lang = binding.get("obj_lang", {}).get("value", "")
+                val = binding["obj_label"]["value"]
+                inst_candidates_group[inst_id][key]["labels"].append((lang, val))
+                
+        for inst_id, groups in inst_candidates_group.items():
+            candidates = []
+            for (prop_name, obj_val, is_literal), details in groups.items():
+                if is_literal:
+                    value = obj_val
+                    dt = details["datatype"]
+                    if "boolean" in dt:
+                        value = (value.lower() == "true")
+                    elif "integer" in dt or "int" in dt:
+                        try: value = int(value)
+                        except: pass
+                    elif "double" in dt or "decimal" in dt or "float" in dt:
+                        try: value = float(value)
+                        except: pass
+                    kind = "literal"
+                else:
+                    obj_id = get_local_name(obj_val)
+                    value = select_preferred_label(details["labels"], obj_id)
+                    kind = "object"
+                    
+                candidates.append({
+                    "property": prop_name,
+                    "value": value,
+                    "kind": kind
+                })
+            inst_candidates[inst_id] = candidates
+            
     summaries = []
     for inst_id, data in inst_data.items():
         selected_label = select_preferred_label(data["labels"], inst_id)
+        
+        candidates = inst_candidates.get(inst_id, [])
+        seen = set()
+        literals = []
+        objects = []
+        for c in candidates:
+            key = (c["property"], str(c["value"]), c["kind"])
+            if key in seen:
+                continue
+            seen.add(key)
+            if c["kind"] == "literal":
+                literals.append(c)
+            else:
+                objects.append(c)
+                
+        literals.sort(key=lambda x: (x["property"], str(x["value"])))
+        objects.sort(key=lambda x: (x["property"], str(x["value"])))
+        
+        combined = literals + objects
+        preview = combined[:3]
+        truncated = len(combined) > 3
+        
         summaries.append({
             "id": inst_id,
             "label": selected_label,
-            "types": sorted(list(data["types"]))
+            "types": sorted(list(data["types"])),
+            "property_preview": preview,
+            "preview_truncated": truncated
         })
     summaries.sort(key=lambda x: x["label"])
     return summaries
@@ -1987,6 +2085,356 @@ def get_instance_property_metadata(inst_name):
         "label": resolved_label,
         "types": sorted(list(types)),
         "properties": properties_list
+    }
+
+
+def get_class_metadata(class_name):
+    """
+    Retrieves metadata for a selected class including descriptions, superclasses,
+    subclasses, asserted restrictions, and equivalent classes.
+    """
+    validate_class_exists_in_graphdb(class_name)
+    class_iri = get_uri(class_name)
+    
+    # 1. Fetch descriptions
+    desc_query = f"""
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+    SELECT ?desc WHERE {{
+        GRAPH <{onto_uri}> {{
+            {{ <{class_iri}> rdfs:comment ?desc }}
+            UNION
+            {{ <{class_iri}> skos:definition ?desc }}
+        }}
+    }}
+    """
+    desc_res = query_graphdb(desc_query)
+    descriptions = sorted(list(set(
+        binding["desc"]["value"] 
+        for binding in desc_res.get("results", {}).get("bindings", [])
+        if "desc" in binding
+    )))
+    
+    # 2. Fetch superclasses (direct parent classes) with label preferred grouping
+    super_query = f"""
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?parent ?parent_label (LANG(?parent_label) AS ?lang) WHERE {{
+        GRAPH <{onto_uri}> {{
+            <{class_iri}> rdfs:subClassOf ?parent .
+            FILTER(isIRI(?parent))
+            FILTER(STRSTARTS(STR(?parent), "http://coupled_modelling.owl#"))
+            OPTIONAL {{ ?parent rdfs:label ?parent_label . }}
+        }}
+    }}
+    """
+    super_res = query_graphdb(super_query)
+    super_data = {}
+    for binding in super_res.get("results", {}).get("bindings", []):
+        parent_uri = binding["parent"]["value"]
+        parent_id = get_local_name(parent_uri)
+        if parent_id not in super_data:
+            super_data[parent_id] = []
+        if "parent_label" in binding:
+            lang = binding.get("lang", {}).get("value", "")
+            val = binding["parent_label"]["value"]
+            super_data[parent_id].append((lang, val))
+            
+    superclasses = []
+    for parent_id, label_list in super_data.items():
+        lbl = select_preferred_label(label_list, parent_id)
+        superclasses.append({"id": parent_id, "label": lbl})
+    superclasses.sort(key=lambda x: x["label"].lower())
+    
+    # 3. Fetch subclasses with label preferred grouping
+    sub_query = f"""
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?sub ?sub_label (LANG(?sub_label) AS ?lang) WHERE {{
+        GRAPH <{onto_uri}> {{
+            ?sub rdfs:subClassOf <{class_iri}> .
+            FILTER(isIRI(?sub))
+            FILTER(STRSTARTS(STR(?sub), "http://coupled_modelling.owl#"))
+            OPTIONAL {{ ?sub rdfs:label ?sub_label . }}
+        }}
+    }}
+    """
+    sub_res = query_graphdb(sub_query)
+    sub_data = {}
+    for binding in sub_res.get("results", {}).get("bindings", []):
+        sub_uri = binding["sub"]["value"]
+        sub_id = get_local_name(sub_uri)
+        if sub_id not in sub_data:
+            sub_data[sub_id] = []
+        if "sub_label" in binding:
+            lang = binding.get("lang", {}).get("value", "")
+            val = binding["sub_label"]["value"]
+            sub_data[sub_id].append((lang, val))
+            
+    subclasses = []
+    for sub_id, label_list in sub_data.items():
+        lbl = select_preferred_label(label_list, sub_id)
+        subclasses.append({"id": sub_id, "label": lbl})
+    subclasses.sort(key=lambda x: x["label"].lower())
+    
+    # 4. Fetch equivalent classes (as direct classes) with label preferred grouping
+    eq_query = f"""
+    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?eq ?eq_label (LANG(?eq_label) AS ?lang) WHERE {{
+        GRAPH <{onto_uri}> {{
+            <{class_iri}> owl:equivalentClass ?eq .
+            FILTER(isIRI(?eq))
+            FILTER(STRSTARTS(STR(?eq), "http://coupled_modelling.owl#"))
+            OPTIONAL {{ ?eq rdfs:label ?eq_label . }}
+        }}
+    }}
+    """
+    eq_res = query_graphdb(eq_query)
+    eq_data = {}
+    for binding in eq_res.get("results", {}).get("bindings", []):
+        eq_uri = binding["eq"]["value"]
+        eq_id = get_local_name(eq_uri)
+        if eq_id not in eq_data:
+            eq_data[eq_id] = []
+        if "eq_label" in binding:
+            lang = binding.get("lang", {}).get("value", "")
+            val = binding["eq_label"]["value"]
+            eq_data[eq_id].append((lang, val))
+            
+    equivalent_classes = []
+    for eq_id, label_list in eq_data.items():
+        lbl = select_preferred_label(label_list, eq_id)
+        equivalent_classes.append({"id": eq_id, "label": lbl})
+    equivalent_classes.sort(key=lambda x: x["label"].lower())
+    
+    # 5. Fetch restrictions with complex target/literal resolving and label preference
+    restr_query = f"""
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    PREFIX owl: <http://www.w3.org/2002/07/owl#>
+    SELECT ?prop ?prop_label (LANG(?prop_label) AS ?prop_lang) ?kind ?cardinality ?target ?target_label (LANG(?target_label) AS ?target_lbl_lang) ?target_kind (DATATYPE(?target) AS ?target_datatype) (LANG(?target) AS ?target_lang) ?member ?member_label (LANG(?member_label) AS ?member_lang) WHERE {{
+        GRAPH <{onto_uri}> {{
+            {{ <{class_iri}> rdfs:subClassOf ?restr . }}
+            UNION
+            {{ <{class_iri}> owl:equivalentClass ?restr . }}
+            ?restr rdf:type owl:Restriction .
+            ?restr owl:onProperty ?prop .
+            OPTIONAL {{ ?prop rdfs:label ?prop_label . }}
+            
+            {{
+                ?restr owl:someValuesFrom ?target .
+                BIND("some_values_from" AS ?kind)
+                BIND(IF(isIRI(?target), "class", BIND_KIND) AS ?target_kind)
+            }} UNION {{
+                ?restr owl:allValuesFrom ?target .
+                BIND("all_values_from" AS ?kind)
+                BIND(IF(isIRI(?target), "class", BIND_KIND) AS ?target_kind)
+            }} UNION {{
+                ?restr owl:hasValue ?target .
+                BIND("has_value" AS ?kind)
+                BIND(IF(isIRI(?target), "class", BIND_KIND) AS ?target_kind)
+            }} UNION {{
+                ?restr owl:cardinality ?cardinality .
+                BIND("cardinality" AS ?kind)
+            }} UNION {{
+                ?restr owl:minCardinality ?cardinality .
+                BIND("min_cardinality" AS ?kind)
+            }} UNION {{
+                ?restr owl:maxCardinality ?cardinality .
+                BIND("max_cardinality" AS ?kind)
+            }} UNION {{
+                ?restr owl:qualifiedCardinality ?cardinality .
+                BIND("qualified_cardinality" AS ?kind)
+                OPTIONAL {{
+                    ?restr owl:onClass ?targetClass .
+                    BIND(?targetClass AS ?target)
+                    BIND(IF(isIRI(?targetClass), "class", BIND_TARGET_CLASS_KIND) AS ?target_kind)
+                }}
+                OPTIONAL {{
+                    ?restr owl:onDataRange ?targetRange .
+                    BIND(?targetRange AS ?target)
+                    BIND("data_range" AS ?target_kind)
+                }}
+            }} UNION {{
+                ?restr owl:minQualifiedCardinality ?cardinality .
+                BIND("min_qualified_cardinality" AS ?kind)
+                OPTIONAL {{
+                    ?restr owl:onClass ?targetClass .
+                    BIND(?targetClass AS ?target)
+                    BIND(IF(isIRI(?targetClass), "class", BIND_TARGET_CLASS_KIND) AS ?target_kind)
+                }}
+                OPTIONAL {{
+                    ?restr owl:onDataRange ?targetRange .
+                    BIND(?targetRange AS ?target)
+                    BIND("data_range" AS ?target_kind)
+                }}
+            }} UNION {{
+                ?restr owl:maxQualifiedCardinality ?cardinality .
+                BIND("max_qualified_cardinality" AS ?kind)
+                OPTIONAL {{
+                    ?restr owl:onClass ?targetClass .
+                    BIND(?targetClass AS ?target)
+                    BIND(IF(isIRI(?targetClass), "class", BIND_TARGET_CLASS_KIND) AS ?target_kind)
+                }}
+                OPTIONAL {{
+                    ?restr owl:onDataRange ?targetRange .
+                    BIND(?targetRange AS ?target)
+                    BIND("data_range" AS ?target_kind)
+                }}
+            }}
+            
+            OPTIONAL {{
+                FILTER(isIRI(?target))
+                ?target rdfs:label ?target_label .
+            }}
+            
+            OPTIONAL {{
+                ?target owl:intersectionOf/rdf:rest*/rdf:first ?member .
+                FILTER(isIRI(?member))
+                OPTIONAL {{ ?member rdfs:label ?member_label . }}
+            }}
+        }}
+    }}
+    """
+    # Replace temporary SPARQL helper place-holders
+    restr_query = restr_query.replace("BIND_KIND", "IF(isLiteral(?target), 'literal', 'bnode')")
+    restr_query = restr_query.replace("BIND_TARGET_CLASS_KIND", "IF(isLiteral(?targetClass), 'literal', 'bnode')")
+    
+    restr_res = query_graphdb(restr_query)
+    restrictions_data = {}
+    
+    for binding in restr_res.get("results", {}).get("bindings", []):
+        prop_uri = binding["prop"]["value"]
+        prop_id = get_local_name(prop_uri)
+        kind = binding["kind"]["value"]
+        
+        cardinality = None
+        if "cardinality" in binding:
+            try: cardinality = int(binding["cardinality"]["value"])
+            except: cardinality = binding["cardinality"]["value"]
+            
+        target_val = None
+        target_kind = None
+        target_datatype = None
+        target_lang = None
+        if "target" in binding:
+            target_val = binding["target"]["value"]
+            target_kind = binding.get("target_kind", {}).get("value", "class")
+            if "target_datatype" in binding:
+                target_datatype = binding["target_datatype"]["value"]
+            if "target_lang" in binding:
+                target_lang = binding["target_lang"]["value"]
+                
+        key = (prop_id, kind, cardinality, target_val)
+        if key not in restrictions_data:
+            restrictions_data[key] = {
+                "prop_id": prop_id,
+                "prop_labels": [],
+                "kind": kind,
+                "cardinality": cardinality,
+                "target_val": target_val,
+                "target_kind": target_kind,
+                "target_labels": [],
+                "target_datatype": target_datatype,
+                "target_lang": target_lang,
+                "members_map": {}
+            }
+            
+        if "prop_label" in binding:
+            lang = binding.get("prop_lang", {}).get("value", "")
+            val = binding["prop_label"]["value"]
+            restrictions_data[key]["prop_labels"].append((lang, val))
+            
+        if "target_label" in binding:
+            lang = binding.get("target_lbl_lang", {}).get("value", "")
+            val = binding["target_label"]["value"]
+            restrictions_data[key]["target_labels"].append((lang, val))
+            
+        if "member" in binding:
+            member_uri = binding["member"]["value"]
+            member_id = get_local_name(member_uri)
+            if member_id not in restrictions_data[key]["members_map"]:
+                restrictions_data[key]["members_map"][member_id] = []
+            if "member_label" in binding:
+                lang = binding.get("member_lang", {}).get("value", "")
+                val = binding["member_label"]["value"]
+                restrictions_data[key]["members_map"][member_id].append((lang, val))
+                
+    restrictions = []
+    for key, data in restrictions_data.items():
+        prop_lbl = select_preferred_label(data["prop_labels"], data["prop_id"])
+        
+        restr_obj = {
+            "property": {"id": data["prop_id"], "label": prop_lbl},
+            "kind": data["kind"]
+        }
+        
+        if data["cardinality"] is not None:
+            restr_obj["cardinality"] = data["cardinality"]
+            
+        if data["target_val"] is not None:
+            target_id = get_local_name(data["target_val"])
+            
+            if data["target_kind"] == "bnode":
+                members = []
+                for m_id, m_labels in data["members_map"].items():
+                    m_lbl = select_preferred_label(m_labels, m_id)
+                    members.append({"id": m_id, "label": m_lbl})
+                members.sort(key=lambda x: x["label"].lower())
+                
+                if members:
+                    restr_obj["target_kind"] = "intersection"
+                    restr_obj["target"] = {
+                        "id": target_id,
+                        "label": " & ".join(m["label"] for m in members),
+                        "members": members
+                    }
+                else:
+                    restr_obj["target_kind"] = "bnode"
+                    restr_obj["target"] = {
+                        "id": target_id,
+                        "label": f"Anonymous Class ({target_id})"
+                    }
+            elif data["target_kind"] == "literal":
+                val = data["target_val"]
+                if data["target_datatype"] == "http://www.w3.org/2001/XMLSchema#boolean":
+                    val = (val.lower() == "true")
+                elif data["target_datatype"] == "http://www.w3.org/2001/XMLSchema#integer":
+                    try: val = int(val)
+                    except: pass
+                elif data["target_datatype"] in ("http://www.w3.org/2001/XMLSchema#double", "http://www.w3.org/2001/XMLSchema#float"):
+                    try: val = float(val)
+                    except: pass
+                
+                restr_obj["target_kind"] = "literal"
+                restr_obj["target"] = {
+                    "id": data["target_val"],
+                    "label": data["target_val"],
+                    "value": val
+                }
+                if data["target_datatype"]:
+                    restr_obj["target"]["datatype"] = data["target_datatype"]
+                if data["target_lang"]:
+                    restr_obj["target"]["language"] = data["target_lang"]
+            else:
+                target_lbl = select_preferred_label(data["target_labels"], target_id)
+                restr_obj["target_kind"] = data["target_kind"]
+                restr_obj["target"] = {
+                    "id": target_id,
+                    "label": target_lbl
+                }
+                
+        restrictions.append(restr_obj)
+        
+    restrictions.sort(key=lambda x: x["property"]["label"].lower())
+    
+    return {
+        "id": class_name,
+        "label": class_name,
+        "descriptions": descriptions,
+        "superclasses": superclasses,
+        "subclasses": subclasses,
+        "restrictions": restrictions,
+        "equivalent_classes": equivalent_classes
     }
 
 

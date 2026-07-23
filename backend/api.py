@@ -47,6 +47,21 @@ def api_get_class_instance_summaries():
     except Exception as e:
         return jsonify(error=str(e)), 500
 
+@app.route('/api/v1.0/get_class_metadata/', methods=['GET'])
+def api_get_class_metadata():
+    class_name = request.args.get('class')
+    if not class_name:
+        return jsonify(error="Missing required query parameter: class"), 400
+    try:
+        metadata = get_class_metadata(class_name)
+        return jsonify(metadata), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
 
 @app.route('/api/v1.0/get_instance_property_metadata/', methods=['GET'])
 def api_get_instance_property_metadata():
