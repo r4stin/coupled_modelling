@@ -56,12 +56,13 @@
         <!-- Instance List Explorer -->
         <section id="instance-list" class="panel">
             <div class="panel-header">
-                <h2>Instances</h2>
+                <h2>Class Inspector & Instances</h2>
                 <div class="filter-box">
                     <input type="text" id="instance-search" placeholder="Search instances..." disabled>
                 </div>
             </div>
             <div class="panel-content scrollable">
+                <div id="class-metadata-container" class="class-metadata-card" style="display: none;"></div>
                 <div class="active-class-indicator">
                     <span>Active Class: </span><strong id="selected-class-name">None Selected</strong>
                 </div>

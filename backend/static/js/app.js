@@ -253,36 +253,292 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 3. Selection Event Handlers
+    const classMetadataContainer = document.getElementById('class-metadata-container');
+
     function selectClass(className) {
         activeClass = className;
         selectedClassName.textContent = className;
         instanceSearch.disabled = false;
         instanceSearch.value = '';
         addClassInstanceBtn.disabled = false;
-        loadClassInstances(className);
+        loadClassData(className);
     }
 
-    async function loadClassInstances(className) {
+    async function loadClassData(className) {
         instancesUl.innerHTML = '';
         const loadingLi = document.createElement('li');
         loadingLi.className = 'status-msg';
         loadingLi.textContent = 'Loading class instances...';
         instancesUl.appendChild(loadingLi);
 
-        try {
-            const response = await fetch(`/api/v1.0/get_class_instance_summaries/?class=${encodeURIComponent(className)}`);
-            if (!response.ok) throw new Error('Failed to load class instances');
-            instancesData = await response.json();
-            renderInstancesList(instancesData);
-        } catch (err) {
-            instancesUl.innerHTML = '';
-            const errorLi = document.createElement('li');
-            errorLi.className = 'status-msg';
-            errorLi.style.color = '#f87171';
-            errorLi.textContent = `Error: ${err.message}`;
-            instancesUl.appendChild(errorLi);
-            verifyHealth();
+        classMetadataContainer.style.display = 'none';
+        classMetadataContainer.innerHTML = '';
+
+        // Fetch class metadata and instances concurrently
+        const metadataPromise = fetch(`/api/v1.0/get_class_metadata/?class=${encodeURIComponent(className)}`)
+            .then(async res => {
+                if (!res.ok) throw new Error('Failed to load class metadata');
+                return res.json();
+            })
+            .then(data => {
+                renderClassMetadata(data);
+            })
+            .catch(err => {
+                renderClassMetadataError(err.message);
+            });
+
+        const instancesPromise = fetch(`/api/v1.0/get_class_instance_summaries/?class=${encodeURIComponent(className)}`)
+            .then(async res => {
+                if (!res.ok) throw new Error('Failed to load class instances');
+                return res.json();
+            })
+            .then(data => {
+                instancesData = data;
+                renderInstancesList(instancesData);
+            })
+            .catch(err => {
+                instancesUl.innerHTML = '';
+                const errorLi = document.createElement('li');
+                errorLi.className = 'status-msg';
+                errorLi.style.color = '#f87171';
+                errorLi.textContent = `Error: ${err.message}`;
+                instancesUl.appendChild(errorLi);
+                verifyHealth();
+            });
+
+        await Promise.allSettled([metadataPromise, instancesPromise]);
+    }
+
+    function renderClassMetadata(data) {
+        classMetadataContainer.innerHTML = '';
+        classMetadataContainer.style.display = 'block';
+
+        // 1. Descriptions
+        if (data.descriptions && data.descriptions.length > 0) {
+            data.descriptions.forEach(desc => {
+                const descP = document.createElement('p');
+                descP.className = 'class-description';
+                descP.textContent = desc;
+                classMetadataContainer.appendChild(descP);
+            });
+        } else {
+            const descP = document.createElement('p');
+            descP.className = 'class-description muted-msg';
+            descP.textContent = 'No description available';
+            classMetadataContainer.appendChild(descP);
         }
+
+        // 2. Parents and Children / Subclasses
+        const relationshipsDiv = document.createElement('div');
+        relationshipsDiv.className = 'class-relationships';
+
+        // Superclasses
+        const superDiv = document.createElement('div');
+        superDiv.className = 'relationship-group';
+        superDiv.innerHTML = '<span class="relationship-label">Superclasses: </span>';
+        if (data.superclasses && data.superclasses.length > 0) {
+            data.superclasses.forEach((s, idx) => {
+                const link = document.createElement('span');
+                link.className = 'class-nav-link';
+                link.textContent = s.label;
+                link.addEventListener('click', () => {
+                    selectClassInTreeAndLoad(s.id);
+                });
+                superDiv.appendChild(link);
+                if (idx < data.superclasses.length - 1) {
+                    superDiv.appendChild(document.createTextNode(', '));
+                }
+            });
+        } else {
+            const span = document.createElement('span');
+            span.className = 'muted-msg';
+            span.textContent = 'None (Root Class)';
+            superDiv.appendChild(span);
+        }
+        relationshipsDiv.appendChild(superDiv);
+
+        // Subclasses
+        const subDiv = document.createElement('div');
+        subDiv.className = 'relationship-group';
+        subDiv.innerHTML = '<span class="relationship-label">Subclasses: </span>';
+        if (data.subclasses && data.subclasses.length > 0) {
+            data.subclasses.forEach((s, idx) => {
+                const link = document.createElement('span');
+                link.className = 'class-nav-link';
+                link.textContent = s.label;
+                link.addEventListener('click', () => {
+                    selectClassInTreeAndLoad(s.id);
+                });
+                subDiv.appendChild(link);
+                if (idx < data.subclasses.length - 1) {
+                    subDiv.appendChild(document.createTextNode(', '));
+                }
+            });
+        } else {
+            const span = document.createElement('span');
+            span.className = 'muted-msg';
+            span.textContent = 'None (Leaf Class)';
+            subDiv.appendChild(span);
+        }
+        relationshipsDiv.appendChild(subDiv);
+
+        // Equivalent classes
+        const eqDiv = document.createElement('div');
+        eqDiv.className = 'relationship-group';
+        eqDiv.innerHTML = '<span class="relationship-label">Equivalent to: </span>';
+        if (data.equivalent_classes && data.equivalent_classes.length > 0) {
+            data.equivalent_classes.forEach((e, idx) => {
+                const link = document.createElement('span');
+                link.className = 'class-nav-link';
+                link.textContent = e.label;
+                link.addEventListener('click', () => {
+                    selectClassInTreeAndLoad(e.id);
+                });
+                eqDiv.appendChild(link);
+                if (idx < data.equivalent_classes.length - 1) {
+                    eqDiv.appendChild(document.createTextNode(', '));
+                }
+            });
+        } else {
+            const span = document.createElement('span');
+            span.className = 'muted-msg';
+            span.textContent = 'None';
+            eqDiv.appendChild(span);
+        }
+        relationshipsDiv.appendChild(eqDiv);
+        
+        classMetadataContainer.appendChild(relationshipsDiv);
+
+        // 3. Asserted Restrictions
+        const axiomsDiv = document.createElement('div');
+        axiomsDiv.className = 'class-axioms';
+        axiomsDiv.innerHTML = '<div class="axioms-label">Asserted Restrictions:</div>';
+
+        if (data.restrictions && data.restrictions.length > 0) {
+            const list = document.createElement('ul');
+            list.className = 'axioms-list';
+            data.restrictions.forEach(r => {
+                const li = document.createElement('li');
+                li.className = 'axiom-item';
+
+                // 1. Property Name
+                const propSpan = document.createElement('span');
+                propSpan.className = 'axiom-prop';
+                propSpan.textContent = r.property.label;
+                li.appendChild(propSpan);
+                li.appendChild(document.createTextNode(' '));
+                
+                // 2. Quantifier kind
+                let kindText = r.kind;
+                if (r.kind === 'some_values_from') kindText = 'some';
+                else if (r.kind === 'all_values_from') kindText = 'all';
+                else if (r.kind === 'has_value') kindText = 'value';
+                else if (r.kind === 'qualified_cardinality') kindText = 'exactly';
+                else if (r.kind === 'min_qualified_cardinality') kindText = 'min';
+                else if (r.kind === 'max_qualified_cardinality') kindText = 'max';
+                else if (r.kind === 'cardinality') kindText = 'exactly';
+                else if (r.kind === 'min_cardinality') kindText = 'min';
+                else if (r.kind === 'max_cardinality') kindText = 'max';
+
+                const kindSpan = document.createElement('span');
+                kindSpan.className = 'axiom-kind';
+                kindSpan.textContent = kindText;
+                li.appendChild(kindSpan);
+                li.appendChild(document.createTextNode(' '));
+                
+                // 3. Optional Cardinality Value
+                if (r.cardinality !== undefined) {
+                    const cardinalitySpan = document.createElement('span');
+                    cardinalitySpan.className = 'axiom-cardinality';
+                    cardinalitySpan.textContent = r.cardinality;
+                    li.appendChild(cardinalitySpan);
+                    li.appendChild(document.createTextNode(' '));
+                }
+
+                // 4. Target class/bnode/intersection/literal
+                if (r.target) {
+                    const targetWrapper = document.createElement('span');
+                    if (r.target_kind === 'class') {
+                        const link = document.createElement('span');
+                        link.className = 'axiom-target class-nav-link';
+                        link.dataset.targetId = r.target.id;
+                        link.textContent = r.target.label;
+                        link.addEventListener('click', () => {
+                            selectClassInTreeAndLoad(r.target.id);
+                        });
+                        targetWrapper.appendChild(link);
+                    } else if (r.target_kind === 'intersection') {
+                        r.target.members.forEach((m, idx) => {
+                            const link = document.createElement('span');
+                            link.className = 'axiom-target class-nav-link';
+                            link.dataset.targetId = m.id;
+                            link.textContent = m.label;
+                            link.addEventListener('click', () => {
+                                selectClassInTreeAndLoad(m.id);
+                            });
+                            targetWrapper.appendChild(link);
+                            
+                            if (idx < r.target.members.length - 1) {
+                                targetWrapper.appendChild(document.createTextNode(' & '));
+                            }
+                        });
+                    } else {
+                        const nonNavLink = document.createElement('span');
+                        nonNavLink.className = 'axiom-target-non-nav';
+                        nonNavLink.textContent = r.target.label;
+                        targetWrapper.appendChild(nonNavLink);
+                    }
+                    li.appendChild(targetWrapper);
+                }
+
+                list.appendChild(li);
+            });
+            axiomsDiv.appendChild(list);
+        } else {
+            const span = document.createElement('span');
+            span.className = 'muted-msg';
+            span.textContent = 'No class restrictions asserted';
+            axiomsDiv.appendChild(span);
+        }
+        classMetadataContainer.appendChild(axiomsDiv);
+    }
+
+    function renderClassMetadataError(msg) {
+        classMetadataContainer.innerHTML = '';
+        classMetadataContainer.style.display = 'block';
+        const p = document.createElement('p');
+        p.className = 'status-msg';
+        p.style.color = '#f87171';
+        p.textContent = `Warning: ${msg}`;
+        classMetadataContainer.appendChild(p);
+    }
+
+    function selectClassInTreeAndLoad(className) {
+        const label = document.querySelector(`.tree-node-label-container[data-class="${className}"]`);
+        if (label) {
+            let parentNode = label.closest('.tree-children');
+            while (parentNode) {
+                parentNode.classList.add('expanded');
+                const parentLi = parentNode.closest('.tree-node');
+                if (parentLi) {
+                    const toggle = parentLi.querySelector(':scope > .tree-node-label-container > .tree-toggle-btn');
+                    if (toggle && (toggle.innerHTML === '▸' || toggle.innerHTML === '&#9656;')) {
+                        toggle.innerHTML = '&#9662;'; // expanded chevron ▾
+                    }
+                }
+                parentNode = parentNode.parentElement.closest('.tree-children');
+            }
+            
+            document.querySelectorAll('.tree-node-label-container').forEach(el => {
+                el.classList.remove('selected');
+            });
+            document.querySelectorAll(`.tree-node-label-container[data-class="${className}"]`).forEach(el => {
+                el.classList.add('selected');
+            });
+            
+            label.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+        selectClass(className);
     }
 
     function renderInstancesList(items) {
@@ -337,6 +593,40 @@ document.addEventListener('DOMContentLoaded', () => {
                     idSpan.className = 'item-secondary-id';
                     idSpan.textContent = ` (${item.id})`;
                     li.appendChild(idSpan);
+                }
+
+                if (item.property_preview && item.property_preview.length > 0) {
+                    const previewDiv = document.createElement('div');
+                    previewDiv.className = 'instance-preview-container';
+                    
+                    item.property_preview.forEach((p, idx) => {
+                        const chip = document.createElement('span');
+                        chip.className = 'preview-chip';
+                        
+                        let valStr = p.value;
+                        if (typeof p.value === 'boolean') {
+                            valStr = p.value ? 'true' : 'false';
+                        }
+                        
+                        chip.innerHTML = `<span class="preview-key">${escapeHtml(p.property)}:</span> <span class="preview-val">${escapeHtml(valStr)}</span>`;
+                        previewDiv.appendChild(chip);
+                        
+                        if (idx < item.property_preview.length - 1) {
+                            const separator = document.createElement('span');
+                            separator.className = 'preview-separator';
+                            separator.innerHTML = ' &middot; ';
+                            previewDiv.appendChild(separator);
+                        }
+                    });
+                    
+                    if (item.preview_truncated) {
+                        const trunc = document.createElement('span');
+                        trunc.className = 'preview-trunc';
+                        trunc.innerHTML = ' &middot; <span class="preview-more">+ more</span>';
+                        previewDiv.appendChild(trunc);
+                    }
+                    
+                    li.appendChild(previewDiv);
                 }
                 
                 if (activeInstance === item.id) {

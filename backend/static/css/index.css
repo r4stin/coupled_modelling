@@ -844,3 +844,163 @@ body {
         opacity: 0;
     }
 }
+
+/* Instance List Inline Property Previews */
+.instance-preview-container {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.3;
+    color: #64748b;
+    word-break: break-all;
+}
+
+.instance-group-list li.selected .instance-preview-container {
+    color: #e2e8f0;
+}
+
+.preview-chip {
+    display: inline;
+}
+
+.preview-key {
+    color: #475569;
+    font-weight: 500;
+}
+
+.instance-group-list li:hover .preview-key {
+    color: #64748b;
+}
+
+.instance-group-list li.selected .preview-key {
+    color: #cbd5e1;
+}
+
+.preview-val {
+    color: #94a3b8;
+}
+
+.instance-group-list li:hover .preview-val {
+    color: #cbd5e1;
+}
+
+.instance-group-list li.selected .preview-val {
+    color: #ffffff;
+    font-weight: 500;
+}
+
+.preview-separator {
+    color: #334155;
+    font-weight: bold;
+}
+
+.instance-group-list li.selected .preview-separator {
+    color: #64748b;
+}
+
+.preview-more {
+    color: #3b82f6;
+    font-weight: 600;
+    font-size: 10px;
+}
+
+.instance-group-list li.selected .preview-more {
+    color: #ffffff;
+}
+
+/* Class Inspector Styles */
+.class-metadata-card {
+    background-color: #161622;
+    border: 1px solid #27273a;
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+
+.class-description {
+    font-size: 13px;
+    color: #cbd5e1;
+    margin: 0 0 12px 0;
+    line-height: 1.5;
+}
+
+.class-relationships {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 12px;
+    font-size: 12px;
+}
+
+.relationship-group {
+    display: block;
+    line-height: 1.4;
+}
+
+.relationship-label {
+    color: #64748b;
+    font-weight: 600;
+}
+
+.class-nav-link {
+    color: #3b82f6;
+    text-decoration: underline;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+
+.class-nav-link:hover {
+    color: #60a5fa;
+}
+
+.class-axioms {
+    border-top: 1px solid #2e2e3f;
+    padding-top: 12px;
+    font-size: 12px;
+}
+
+.axioms-label {
+    color: #64748b;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.axioms-list {
+    list-style-type: none;
+    padding-left: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.axiom-item {
+    font-family: monospace;
+    color: #cbd5e1;
+    font-size: 11px;
+}
+
+.axiom-prop {
+    color: #f43f5e;
+}
+
+.axiom-kind {
+    color: #10b981;
+    font-weight: 600;
+}
+
+.axiom-cardinality {
+    color: #f59e0b;
+}
+
+.axiom-target {
+    color: #3b82f6;
+}
+
+.axiom-target-non-nav {
+    color: #94a3b8;
+}
+
+.muted-msg {
+    color: #64748b;
+    font-style: italic;
+}
