@@ -2438,7 +2438,7 @@ def get_class_metadata(class_name):
     }
 
 
-onto_uri = 'http://coupled_modelling.owl'
+onto_uri = os.getenv("GRAPHDB_GRAPH", "http://coupled_modelling.owl")
 # default_world.set_backend(filename = get_db_path())
 
 try:
