@@ -10,7 +10,7 @@
     rep:repositoryImpl [
         rep:repositoryType "graphdb:SailRepository" ;
         sr:sailImpl [
-            sail:sailType "graphdb:FreeSail" ;
+            sail:sailType "graphdb:Sail" ;
             ms:evaluationStrategyFactory "com.ontotext.trree.evaluation.ExtendedEvaluationStrategyFactory"
         ]
     ] .
