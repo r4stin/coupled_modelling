@@ -13,7 +13,8 @@ from main import (
     select_preferred_label, 
     get_class_hierarchy_metadata,
     get_class_instance_summaries, 
-    get_instance_property_metadata
+    get_instance_property_metadata,
+    get_class_metadata
 )
 
 
@@ -166,28 +167,37 @@ class TestWebExplorer(unittest.TestCase):
     @patch('main.validate_class_exists_in_graphdb')
     def test_get_class_instance_summaries_parsing(self, mock_val, mock_query):
         """Verify instance summaries aggregation and label selection parsing."""
-        mock_query.return_value = {
-            "results": {
-                "bindings": [
-                    {
-                        "inst": {"value": "http://coupled_modelling.owl#inst_1"}, 
-                        "label": {"value": "coupling_system_en", "xml:lang": "en"},
-                        "lang": {"value": "en"},
-                        "type": {"value": "http://coupled_modelling.owl#coupled_system_1"}
-                    },
-                    {
-                        "inst": {"value": "http://coupled_modelling.owl#inst_1"}, 
-                        "label": {"value": "coupling_system_de", "xml:lang": "de"},
-                        "lang": {"value": "de"},
-                        "type": {"value": "http://coupled_modelling.owl#coupled_system_1"}
-                    },
-                    {
-                        "inst": {"value": "http://coupled_modelling.owl#inst_2"},
-                        "type": {"value": "http://coupled_modelling.owl#coupled_system_2"}
+        def mock_query_responses(query):
+            if "SELECT ?inst ?label" in query:
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "inst": {"value": "http://coupled_modelling.owl#inst_1"}, 
+                                "label": {"value": "coupling_system_en", "xml:lang": "en"},
+                                "lang": {"value": "en"},
+                                "type": {"value": "http://coupled_modelling.owl#coupled_system_1"}
+                            },
+                            {
+                                "inst": {"value": "http://coupled_modelling.owl#inst_1"}, 
+                                "label": {"value": "coupling_system_de", "xml:lang": "de"},
+                                "lang": {"value": "de"},
+                                "type": {"value": "http://coupled_modelling.owl#coupled_system_1"}
+                            },
+                            {
+                                "inst": {"value": "http://coupled_modelling.owl#inst_2"},
+                                "type": {"value": "http://coupled_modelling.owl#coupled_system_2"}
+                            }
+                        ]
                     }
-                ]
-            }
-        }
+                }
+            else:
+                return {
+                    "results": {
+                        "bindings": []
+                    }
+                }
+        mock_query.side_effect = mock_query_responses
         res = get_class_instance_summaries("coupled_system")
         self.assertEqual(len(res), 2)
         
@@ -200,6 +210,71 @@ class TestWebExplorer(unittest.TestCase):
         self.assertEqual(res[1]["id"], "inst_2")
         self.assertEqual(res[1]["label"], "inst_2")
         self.assertEqual(res[1]["types"], ["coupled_system_2"])
+
+    @patch('main.query_graphdb')
+    @patch('main.validate_class_exists_in_graphdb')
+    def test_get_class_instance_summaries_previews(self, mock_val, mock_query):
+        """Verify instance summaries include deterministic previews with limits and sorting."""
+        def mock_query_responses(query):
+            if "SELECT ?inst ?label" in query:
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "inst": {"value": "http://coupled_modelling.owl#inst_1"}, 
+                                "label": {"value": "coupling_system_en", "xml:lang": "en"},
+                                "lang": {"value": "en"},
+                                "type": {"value": "http://coupled_modelling.owl#coupled_system_1"}
+                            }
+                        ]
+                    }
+                }
+            else:
+                # Outgoing properties for inst_1
+                return {
+                    "results": {
+                        "bindings": [
+                            # Exclude type / label properties:
+                            {"inst": {"value": "http://coupled_modelling.owl#inst_1"}, "prop": {"value": "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"}, "obj": {"type": "uri", "value": "http://coupled_modelling.owl#coupled_system_1"}},
+                            {"inst": {"value": "http://coupled_modelling.owl#inst_1"}, "prop": {"value": "http://www.w3.org/2000/01/rdf-schema#label"}, "obj": {"type": "literal", "value": "coupling_system_en"}},
+                            
+                            # Literals to include:
+                            {"inst": {"value": "http://coupled_modelling.owl#inst_1"}, "prop": {"value": "http://coupled_modelling.owl#start_time"}, "obj": {"type": "literal", "value": "0.0", "datatype": "http://www.w3.org/2001/XMLSchema#double"}},
+                            {"inst": {"value": "http://coupled_modelling.owl#inst_1"}, "prop": {"value": "http://coupled_modelling.owl#echo_level"}, "obj": {"type": "literal", "value": "2", "datatype": "http://www.w3.org/2001/XMLSchema#integer"}},
+                            
+                            # Object reference to include (with multiple language labels, testing preferred label preference):
+                            {"inst": {"value": "http://coupled_modelling.owl#inst_1"}, "prop": {"value": "http://coupled_modelling.owl#has_solver"}, "obj": {"type": "uri", "value": "http://coupled_modelling.owl#solver_1"}, "obj_label": {"value": "CFD_Solver_fr"}, "obj_lang": {"value": "fr"}},
+                            {"inst": {"value": "http://coupled_modelling.owl#inst_1"}, "prop": {"value": "http://coupled_modelling.owl#has_solver"}, "obj": {"type": "uri", "value": "http://coupled_modelling.owl#solver_1"}, "obj_label": {"value": "CFD Solver"}, "obj_lang": {"value": "en"}}
+                        ]
+                    }
+                }
+        mock_query.side_effect = mock_query_responses
+        res = get_class_instance_summaries("coupled_system")
+        
+        self.assertEqual(len(res), 1)
+        inst = res[0]
+        
+        # Candidate properties list:
+        # echo_level: 2 (literal)
+        # start_time: 0.0 (literal)
+        # has_solver: CFD Solver (object, with English label preferred)
+        
+        # Literals are preferred and sorted alphabetically:
+        # 1. echo_level (2)
+        # 2. start_time (0.0)
+        # 3. has_solver (CFD Solver) - object reference falls back at end
+        
+        self.assertEqual(len(inst["property_preview"]), 3)
+        self.assertEqual(inst["property_preview"][0]["property"], "echo_level")
+        self.assertEqual(inst["property_preview"][0]["value"], 2)
+        self.assertEqual(inst["property_preview"][1]["property"], "start_time")
+        self.assertEqual(inst["property_preview"][1]["value"], 0.0)
+        self.assertEqual(inst["property_preview"][2]["property"], "has_solver")
+        self.assertEqual(inst["property_preview"][2]["value"], "CFD Solver")
+        self.assertEqual(inst["property_preview"][2]["kind"], "object")
+        
+        # Truncated is False because we fit all 3 candidate properties in the cap of 3
+        self.assertFalse(inst["preview_truncated"])
 
     @patch('main.query_graphdb')
     @patch('main.validate_subject_exists')
@@ -273,6 +348,179 @@ class TestWebExplorer(unittest.TestCase):
         self.assertEqual(res["properties"][2]["values"][0]["kind"], "object")
         self.assertEqual(res["properties"][2]["values"][0]["id"], "solver_1")
         self.assertEqual(res["properties"][2]["values"][0]["label"], "CFD_Solver") # English label preferred
+
+    @patch('api.get_class_metadata')
+    def test_get_class_metadata_error_503(self, mock_helper):
+        """Verify get_class_metadata returns 503 on GraphDBError."""
+        mock_helper.side_effect = GraphDBError("GraphDB offline")
+        response = self.app.get('/api/v1.0/get_class_metadata/?class=solver')
+        self.assertEqual(response.status_code, 503)
+
+    @patch('api.get_class_metadata')
+    def test_get_class_metadata_error_400(self, mock_helper):
+        """Verify get_class_metadata returns 400 on ValueError."""
+        mock_helper.side_effect = ValueError("Invalid class")
+        response = self.app.get('/api/v1.0/get_class_metadata/?class=solver')
+        self.assertEqual(response.status_code, 400)
+
+    def test_get_class_metadata_missing_param(self):
+        """Verify get_class_metadata returns 400 when class query parameter is missing."""
+        response = self.app.get('/api/v1.0/get_class_metadata/')
+        self.assertEqual(response.status_code, 400)
+        data = json.loads(response.data.decode('utf-8'))
+        self.assertIn("Missing required query parameter", data["error"])
+
+    @patch('main.query_graphdb')
+    @patch('main.validate_class_exists_in_graphdb')
+    def test_get_class_metadata_parsing(self, mock_val, mock_query):
+        """Verify class metadata parser maps parents, subclasses, equivalent classes, literals, and intersections."""
+        def mock_query_responses(query):
+            if "owl:Restriction" in query:
+                return {
+                    "results": {
+                        "bindings": [
+                            # 1. Qualified restriction: solver_type qualified_cardinality exactly 1
+                            {
+                                "prop": {"value": "http://coupled_modelling.owl#solver_type"},
+                                "prop_label": {"value": "solver_type"},
+                                "kind": {"value": "qualified_cardinality"},
+                                "cardinality": {"value": "1"},
+                                "target": {"value": "http://coupled_modelling.owl#solver_type"},
+                                "target_label": {"value": "solver_type"},
+                                "target_kind": {"value": "class"}
+                            },
+                            # 2. Intersection target restriction (member 1)
+                            {
+                                "prop": {"value": "http://coupled_modelling.owl#has_solver"},
+                                "prop_label": {"value": "has_solver"},
+                                "kind": {"value": "some_values_from"},
+                                "target": {"value": "node123"},
+                                "target_kind": {"value": "bnode"},
+                                "member": {"value": "http://coupled_modelling.owl#solver"},
+                                "member_label": {"value": "solver"}
+                            },
+                            # 2. Intersection target restriction (member 2)
+                            {
+                                "prop": {"value": "http://coupled_modelling.owl#has_solver"},
+                                "prop_label": {"value": "has_solver"},
+                                "kind": {"value": "some_values_from"},
+                                "target": {"value": "node123"},
+                                "target_kind": {"value": "bnode"},
+                                "member": {"value": "http://coupled_modelling.owl#solver_settings"},
+                                "member_label": {"value": "solver_settings"}
+                            },
+                            # 3. Literal target restriction (hasValue boolean)
+                            {
+                                "prop": {"value": "http://coupled_modelling.owl#print_colors"},
+                                "prop_label": {"value": "print_colors"},
+                                "kind": {"value": "has_value"},
+                                "target": {"value": "true"},
+                                "target_kind": {"value": "literal"},
+                                "target_datatype": {"value": "http://www.w3.org/2001/XMLSchema#boolean"}
+                            }
+                        ]
+                    }
+                }
+            elif "rdfs:comment" in query or "skos:definition" in query:
+                return {
+                    "results": {
+                        "bindings": [
+                            {"desc": {"value": "Configuration settings for solver wrappers."}}
+                        ]
+                    }
+                }
+            elif "rdfs:subClassOf ?parent" in query:
+                # Test multilingual label preference: French and English labels
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "parent": {"value": "http://coupled_modelling.owl#coupling_component"},
+                                "parent_label": {"value": "coupling_component_fr"},
+                                "lang": {"value": "fr"}
+                            },
+                            {
+                                "parent": {"value": "http://coupled_modelling.owl#coupling_component"},
+                                "parent_label": {"value": "Coupling Component"},
+                                "lang": {"value": "en"}
+                            }
+                        ]
+                    }
+                }
+            elif "?sub rdfs:subClassOf" in query:
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "sub": {"value": "http://coupled_modelling.owl#kratos_solver_wrapper_settings"},
+                                "sub_label": {"value": "kratos_solver_wrapper_settings"}
+                            }
+                        ]
+                    }
+                }
+            elif "owl:equivalentClass" in query:
+                # Named equivalent class
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "eq": {"value": "http://coupled_modelling.owl#wrapper_settings"},
+                                "eq_label": {"value": "Wrapper Settings"},
+                                "lang": {"value": "en"}
+                            }
+                        ]
+                    }
+                }
+            return {"results": {"bindings": []}}
+
+        mock_query.side_effect = mock_query_responses
+        res = get_class_metadata("solver_wrapper_settings")
+        
+        self.assertEqual(res["id"], "solver_wrapper_settings")
+        self.assertEqual(res["descriptions"], ["Configuration settings for solver wrappers."])
+        
+        # Superclasses: verifies that English label is preferred over French
+        self.assertEqual(len(res["superclasses"]), 1)
+        self.assertEqual(res["superclasses"][0]["id"], "coupling_component")
+        self.assertEqual(res["superclasses"][0]["label"], "Coupling Component")
+        
+        # Subclasses
+        self.assertEqual(len(res["subclasses"]), 1)
+        self.assertEqual(res["subclasses"][0]["id"], "kratos_solver_wrapper_settings")
+        
+        # Equivalent Classes
+        self.assertEqual(len(res["equivalent_classes"]), 1)
+        self.assertEqual(res["equivalent_classes"][0]["id"], "wrapper_settings")
+        self.assertEqual(res["equivalent_classes"][0]["label"], "Wrapper Settings")
+        
+        # Asserted Restrictions
+        self.assertEqual(len(res["restrictions"]), 3)
+        
+        # 1. has_solver some_values_from solver & solver_settings (intersection)
+        r1 = res["restrictions"][0]
+        self.assertEqual(r1["property"]["id"], "has_solver")
+        self.assertEqual(r1["kind"], "some_values_from")
+        self.assertEqual(r1["target_kind"], "intersection")
+        self.assertEqual(r1["target"]["label"], "solver & solver_settings")
+        self.assertEqual(len(r1["target"]["members"]), 2)
+        self.assertEqual(r1["target"]["members"][0]["id"], "solver")
+        self.assertEqual(r1["target"]["members"][1]["id"], "solver_settings")
+        
+        # 2. print_colors has_value true (literal)
+        r2 = res["restrictions"][1]
+        self.assertEqual(r2["property"]["id"], "print_colors")
+        self.assertEqual(r2["kind"], "has_value")
+        self.assertEqual(r2["target_kind"], "literal")
+        self.assertEqual(r2["target"]["value"], True)
+        self.assertEqual(r2["target"]["datatype"], "http://www.w3.org/2001/XMLSchema#boolean")
+        
+        # 3. solver_type qualified_cardinality 1 solver_type (class)
+        r3 = res["restrictions"][2]
+        self.assertEqual(r3["property"]["id"], "solver_type")
+        self.assertEqual(r3["kind"], "qualified_cardinality")
+        self.assertEqual(r3["cardinality"], 1)
+        self.assertEqual(r3["target"]["id"], "solver_type")
+        self.assertEqual(r3["target_kind"], "class")
 
 
 if __name__ == '__main__':
