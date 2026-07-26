@@ -73,6 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // State Variables
     let activeClass = null;
     let activeInstance = null;
+    let activeInstanceLabel = null;
     let instancesData = []; // Cached summaries list for search filtering
     let classHierarchy = []; // Store hierarchy lists for type mapping on navigation
     let allInstancesCache = null; // Cache for global search
@@ -680,6 +681,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
             renderInspector(data);
         } catch (err) {
+            activeInstanceLabel = null;
             deleteInstanceBtn.style.display = 'none';
             exportKratosBtn.style.display = 'none';
             addChildPropertyBtn.style.display = 'none';
@@ -689,6 +691,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderInspector(data) {
+        activeInstanceLabel = data.label;
         inspectorContent.innerHTML = '';
 
         // Header section
@@ -1296,8 +1299,14 @@ document.addEventListener('DOMContentLoaded', () => {
         deleteInstanceBtn.addEventListener('click', async () => {
             if (!activeInstance) return;
 
-            const instLabel = activeInstance;
-            const confirmed = confirm(`Are you sure you want to permanently delete instance "${instLabel}" from GraphDB?`);
+            let displayTarget = activeInstance;
+            if (activeInstanceLabel && activeInstanceLabel !== activeInstance) {
+                displayTarget = `"${activeInstanceLabel}" (${activeInstance})`;
+            } else {
+                displayTarget = `"${activeInstance}"`;
+            }
+
+            const confirmed = confirm(`Are you sure you want to permanently delete instance ${displayTarget} from GraphDB?`);
             if (!confirmed) return;
 
             try {
@@ -1316,9 +1325,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 allInstancesCache = null;
-                showToast(`Instance "${instLabel}" deleted successfully from GraphDB`, 'success');
+                showToast(`Instance ${displayTarget} deleted successfully from GraphDB`, 'success');
                 
                 activeInstance = null;
+                activeInstanceLabel = null;
                 deleteInstanceBtn.style.display = 'none';
                 exportKratosBtn.style.display = 'none';
                 addChildPropertyBtn.style.display = 'none';
