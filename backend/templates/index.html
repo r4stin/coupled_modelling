@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aerospace KB Web Explorer</title>
-    <link class="stylesheet-ref" rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}?v=1.0.1">
+    <link class="stylesheet-ref" rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}?v=1.0.2">
 </head>
 
 <body>
@@ -80,6 +80,8 @@
                     <div class="inspector-actions">
                         <button id="export-kratos-btn" class="btn btn-small btn-secondary" style="display: none;"
                             title="Export co-simulation JSON">Export JSON</button>
+                        <button id="delete-instance-btn" class="btn btn-small btn-danger" style="display: none;"
+                            title="Delete this instance permanently from GraphDB">Delete Instance</button>
                         <button id="add-child-property-btn" class="btn btn-small btn-primary" style="display: none;"
                             title="Add child setting property">+</button>
                     </div>
@@ -166,7 +168,7 @@
     </div>
 
     <div id="toast-container" class="toast-container"></div>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=1.0.1"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=1.0.2"></script>
 </body>
 
 </html>

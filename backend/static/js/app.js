@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const createInstanceConfirmBtn = document.getElementById('create-instance-confirm-btn');
 
     const exportKratosBtn = document.getElementById('export-kratos-btn');
+    const deleteInstanceBtn = document.getElementById('delete-instance-btn');
     const addChildPropertyBtn = document.getElementById('add-child-property-btn');
     const addChildModal = document.getElementById('add-child-modal');
     const childPropertySelect = document.getElementById('child-property-select');
@@ -679,6 +680,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await response.json();
             renderInspector(data);
         } catch (err) {
+            deleteInstanceBtn.style.display = 'none';
+            exportKratosBtn.style.display = 'none';
+            addChildPropertyBtn.style.display = 'none';
             renderContainerError(inspectorContent, err.message);
             verifyHealth();
         }
@@ -718,6 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             exportKratosBtn.style.display = 'none';
         }
+        deleteInstanceBtn.style.display = 'inline-block';
         addChildPropertyBtn.style.display = 'inline-block';
 
         // Prepare select options for Linked Child Creation
@@ -1286,6 +1291,52 @@ document.addEventListener('DOMContentLoaded', () => {
             exportKratosBtn.textContent = 'Export JSON';
         }
     });
+
+    if (deleteInstanceBtn) {
+        deleteInstanceBtn.addEventListener('click', async () => {
+            if (!activeInstance) return;
+
+            const instLabel = activeInstance;
+            const confirmed = confirm(`Are you sure you want to permanently delete instance "${instLabel}" from GraphDB?`);
+            if (!confirmed) return;
+
+            try {
+                deleteInstanceBtn.disabled = true;
+                deleteInstanceBtn.textContent = 'Deleting...';
+
+                const response = await fetch('/api/v1.0/delete_instance/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ instance: activeInstance })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to delete instance');
+                }
+
+                allInstancesCache = null;
+                showToast(`Instance "${instLabel}" deleted successfully from GraphDB`, 'success');
+                
+                activeInstance = null;
+                deleteInstanceBtn.style.display = 'none';
+                exportKratosBtn.style.display = 'none';
+                addChildPropertyBtn.style.display = 'none';
+                
+                inspectorContent.innerHTML = '<div class="empty-state"><p>Select an instance from the list to view its properties.</p></div>';
+
+                if (activeClass) {
+                    await loadClassData(activeClass);
+                }
+            } catch (err) {
+                console.error('Delete instance error:', err);
+                showToast(`Delete instance failed: ${err.message}`, 'error');
+            } finally {
+                deleteInstanceBtn.disabled = false;
+                deleteInstanceBtn.textContent = 'Delete Instance';
+            }
+        });
+    }
 
     addClassInstanceBtn.addEventListener('click', () => {
         if (!activeClass) return;
