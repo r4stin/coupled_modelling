@@ -1378,7 +1378,7 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('Instance created successfully!', 'success');
             createInstanceModal.style.display = 'none';
             
-            await loadClassInstances(activeClass);
+            await loadClassData(activeClass);
             setTimeout(() => {
                 const item = document.querySelector(`.instance-item-li[data-id="${resData}"]`);
                 if (item) item.click();
