@@ -1365,6 +1365,40 @@ def create_class_instance_sparql(class_name, label):
     return new_name
 
 
+def delete_instance_sparql(instance_name):
+    """
+    Deletes an instance completely from GraphDB by removing all outgoing and incoming triples.
+
+    Args:
+        instance_name (str): The local name or IRI of the instance.
+    """
+    if not instance_name:
+        raise ValueError("instance_name parameter is required.")
+        
+    if not instance_exists(instance_name):
+        raise ValueError(f"Instance {instance_name} does not exist in GraphDB.")
+        
+    inst_iri = serialize_subject(instance_name)
+    query = f"""
+    DELETE {{
+        GRAPH <{onto_uri}> {{
+            {inst_iri} ?p ?o .
+            ?s ?p2 {inst_iri} .
+        }}
+    }}
+    WHERE {{
+        GRAPH <{onto_uri}> {{
+            {{ {inst_iri} ?p ?o . }}
+            UNION
+            {{ ?s ?p2 {inst_iri} . }}
+        }}
+    }}
+    """
+    sparql_update(query)
+    return True
+
+
+
 def get_instance_properties_recursively(inst_name, depth=1, recursive=False):
     """
     Get instance properties and its subproperties recursively.

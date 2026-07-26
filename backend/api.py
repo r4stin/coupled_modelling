@@ -372,6 +372,26 @@ def api_create_class_instance():
         return jsonify(error=str(e)), 500
 
 
+@app.route('/api/v1.0/delete_instance/', methods=['POST'])
+def api_delete_instance():
+    args = request.get_json() or {}
+    instance_name = args.get('instance')
+    
+    if not instance_name:
+        return jsonify(error="instance parameter is required"), 400
+        
+    try:
+        delete_instance_sparql(instance_name)
+        return jsonify(status="success", instance=instance_name), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+
 @app.route('/api/v1.0/download_owl/', methods=['GET'])
 def api_download_owl():
     try:

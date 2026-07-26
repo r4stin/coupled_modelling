@@ -233,5 +233,26 @@ class TestWebMutations(unittest.TestCase):
             res = self.app.post('/api/v1.0/create_class_instance/', json=payload)
             self.assertEqual(res.status_code, 503)
 
+    def test_delete_instance_missing_param(self):
+        res = self.app.post('/api/v1.0/delete_instance/', json={})
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("error", res.get_json())
+
+    def test_delete_instance_success(self):
+        create_res = self.app.post('/api/v1.0/create_class_instance/', json={
+            "class": "solvers",
+            "label": "ToDeleteInstance"
+        })
+        self.assertEqual(create_res.status_code, 201)
+        inst_id = create_res.get_json()
+
+        delete_res = self.app.post('/api/v1.0/delete_instance/', json={
+            "instance": inst_id
+        })
+        self.assertEqual(delete_res.status_code, 200)
+        self.assertEqual(delete_res.get_json().get("status"), "success")
+        self.assertEqual(delete_res.get_json().get("instance"), inst_id)
+        self.assertFalse(main.instance_exists(inst_id))
+
 if __name__ == '__main__':
     unittest.main()
