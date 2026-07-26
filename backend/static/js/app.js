@@ -842,7 +842,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 trashBtn.title = 'Delete specific value';
                 trashBtn.addEventListener('click', async (e) => {
                     e.stopPropagation();
-                    if (!confirm(`Are you sure you want to delete this value?`)) return;
+                    const propName = prop.label || prop.property || 'property';
+                    let valDisplay = val.label || val.value || val.id || 'value';
+                    if (typeof valDisplay === 'string' && valDisplay.length > 40) {
+                        valDisplay = valDisplay.substring(0, 37) + '...';
+                    }
+                    if (!confirm(`Are you sure you want to delete ${propName} "${valDisplay}"?`)) return;
                     
                     let valPayload = null;
                     if (val.kind === 'object') {
