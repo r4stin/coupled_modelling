@@ -224,19 +224,9 @@ document.addEventListener('DOMContentLoaded', () => {
         labelContainer.appendChild(nameSpan);
         li.appendChild(labelContainer);
 
-        labelContainer.addEventListener('click', (e) => {
-            e.stopPropagation();
-            document.querySelectorAll('.tree-node-label-container').forEach(el => {
-                el.classList.remove('selected');
-            });
-            document.querySelectorAll(`.tree-node-label-container[data-class="${className}"]`).forEach(el => {
-                el.classList.add('selected');
-            });
-            selectClass(className);
-        });
-
+        let childUl = null;
         if (children.length > 0) {
-            const childUl = document.createElement('ul');
+            childUl = document.createElement('ul');
             childUl.className = 'tree-children';
             
             toggleSpan.addEventListener('click', (e) => {
@@ -248,6 +238,27 @@ document.addEventListener('DOMContentLoaded', () => {
             children.forEach(child => {
                 renderNodeRecursive(child.class, classes, childUl, [...path, className], visited);
             });
+        }
+
+        labelContainer.addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.tree-node-label-container').forEach(el => {
+                el.classList.remove('selected');
+            });
+            document.querySelectorAll(`.tree-node-label-container[data-class="${className}"]`).forEach(el => {
+                el.classList.add('selected');
+            });
+            selectClass(className);
+
+            if (childUl) {
+                if (!childUl.classList.contains('expanded')) {
+                    childUl.classList.add('expanded');
+                    toggleSpan.innerHTML = '&#9662;';
+                }
+            }
+        });
+
+        if (childUl) {
             li.appendChild(childUl);
         }
 
