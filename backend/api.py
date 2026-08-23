@@ -1,8 +1,30 @@
+import os
+
 from flask import *
 from main import *
 
 
 app = Flask(__name__)
+
+# Cross-origin access for the separate Next.js frontend (coupled-modelling-frontend).
+# Comma-separated list of allowed origins; defaults to the local frontend dev server.
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CORS_ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+    if origin.strip()
+]
+
+
+@app.after_request
+def add_cors_headers(response):
+    origin = request.headers.get('Origin')
+    if origin and (origin in CORS_ALLOWED_ORIGINS or '*' in CORS_ALLOWED_ORIGINS):
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Vary'] = 'Origin'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        response.headers['Access-Control-Max-Age'] = '86400'
+    return response
 
 
 @app.route('/')
