@@ -32,6 +32,12 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/v1.0/openapi.yaml', methods=['GET'])
+def api_openapi_spec():
+    spec_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'openapi.yaml')
+    return send_file(spec_path, mimetype='application/yaml')
+
+
 @app.route('/api/v1.0/health/', methods=['GET'])
 def api_health():
     try:
