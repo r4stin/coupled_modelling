@@ -1065,6 +1065,11 @@ components:
               - $ref: '#/components/schemas/LiteralPropertyValue'
             discriminator:
               propertyName: kind
+              # Explicit mapping keeps generators (openapi-typescript) emitting the runtime
+              # values "object"/"literal" instead of substituting the schema names.
+              mapping:
+                object: '#/components/schemas/ObjectPropertyValue'
+                literal: '#/components/schemas/LiteralPropertyValue'
 
     InstanceMetadata:
       type: object
