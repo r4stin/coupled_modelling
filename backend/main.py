@@ -1128,6 +1128,47 @@ def delete_value_sparql(subj, prop_name, value=None):
 
 
 
+def replace_value_sparql(subj, prop_name, old_value, new_value):
+    """
+    Atomically replaces one specific property value with another in a single
+    SPARQL update, so a failure can never leave the value half-replaced.
+
+    Both values are typed terms ({kind: object|literal, ...}): the old term is
+    matched by value equality (and may reference a dangling instance), the new
+    term keeps its exact datatype/language tag. If the old value no longer
+    exists, the update is a no-op rather than an insert.
+    """
+    validate_subject_exists(subj)
+    if old_value is None or new_value is None:
+        raise ValueError("old_value and new_value parameters are required.")
+
+    subj_iri = serialize_subject(subj)
+    pred_iri = get_property_iri(prop_name)
+    old_term = serialize_metadata_value(old_value, require_existing=False)
+    new_term = serialize_metadata_value(new_value)
+
+    query = f"""
+    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+    DELETE {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {subj_iri} {pred_iri} ?old_val .
+        }}
+    }}
+    INSERT {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {subj_iri} {pred_iri} {new_term} .
+        }}
+    }}
+    WHERE {{
+        GRAPH <http://coupled_modelling.owl> {{
+            {subj_iri} {pred_iri} ?old_val .
+            FILTER(?old_val = {old_term})
+        }}
+    }}
+    """
+    sparql_update(query)
+
+
 def replace_values_sparql(subj, data):
     """
     Replaces all values of the property with the specified new value for each key-value pair in data.

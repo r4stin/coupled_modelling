@@ -359,6 +359,28 @@ def api_get_class_instances():
         return jsonify(error=str(e)), 400
     
 
+@app.route('/api/v1.0/replace_value/', methods=['POST'])
+def api_replace_value():
+    args = request.get_json() or {}
+    inst = args.get('instance')
+    prop = args.get('property')
+    old_value = args.get('old_value')
+    new_value = args.get('new_value')
+
+    if not inst or not prop or old_value is None or new_value is None:
+        return jsonify(error="instance, property, old_value, and new_value parameters are required"), 400
+
+    try:
+        replace_value_sparql(inst, prop, old_value, new_value)
+        return jsonify(''), 201
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
 @app.route('/api/v1.0/delete_value/', methods=['POST'])
 def api_delete_value():
     args = request.get_json()

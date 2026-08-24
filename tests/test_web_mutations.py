@@ -219,6 +219,83 @@ class TestWebMutations(unittest.TestCase):
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
         self.assertEqual(res.status_code, 201)
 
+    def test_replace_value_missing_params(self):
+        res = self.app.post('/api/v1.0/replace_value/', json={"instance": self.test_inst, "property": "echo_level"})
+        self.assertEqual(res.status_code, 400)
+
+    def test_replace_value_literal_success(self):
+        # Seed a value to replace.
+        main.sparql_update(f"""
+        INSERT DATA {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_parallel_type> "OpenMP" .
+            }}
+        }}
+        """)
+        payload = {
+            "instance": self.test_inst,
+            "property": "parallel_type",
+            "old_value": {"kind": "literal", "value": "OpenMP", "datatype": "http://www.w3.org/2001/XMLSchema#string"},
+            "new_value": {"kind": "literal", "value": "MPI", "datatype": "http://www.w3.org/2001/XMLSchema#string"},
+        }
+        res = self.app.post('/api/v1.0/replace_value/', json=payload)
+        self.assertEqual(res.status_code, 201)
+
+        query_new = f"""
+        ASK {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_parallel_type> "MPI" .
+            }}
+        }}
+        """
+        query_old = query_new.replace('"MPI"', '"OpenMP"')
+        self.assertTrue(main.query_graphdb(query_new).get("boolean", False))
+        self.assertFalse(main.query_graphdb(query_old).get("boolean", False))
+
+    def test_replace_value_missing_old_value_is_noop(self):
+        # Replacing a value that is not stored must not insert the new value.
+        payload = {
+            "instance": self.test_inst,
+            "property": "parallel_type",
+            "old_value": {"kind": "literal", "value": "never_existed", "datatype": "http://www.w3.org/2001/XMLSchema#string"},
+            "new_value": {"kind": "literal", "value": "ghost", "datatype": "http://www.w3.org/2001/XMLSchema#string"},
+        }
+        res = self.app.post('/api/v1.0/replace_value/', json=payload)
+        self.assertEqual(res.status_code, 201)
+        query_ghost = f"""
+        ASK {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_parallel_type> "ghost" .
+            }}
+        }}
+        """
+        self.assertFalse(main.query_graphdb(query_ghost).get("boolean", False))
+
+    def test_replace_value_preserves_language_tag(self):
+        main.sparql_update(f"""
+        INSERT DATA {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_comment> "Ein Loeser"@de .
+            }}
+        }}
+        """)
+        payload = {
+            "instance": self.test_inst,
+            "property": "comment",
+            "old_value": {"kind": "literal", "value": "Ein Loeser", "language": "de"},
+            "new_value": {"kind": "literal", "value": "Ein Solver", "language": "de"},
+        }
+        res = self.app.post('/api/v1.0/replace_value/', json=payload)
+        self.assertEqual(res.status_code, 201)
+        query_new = f"""
+        ASK {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_comment> "Ein Solver"@de .
+            }}
+        }}
+        """
+        self.assertTrue(main.query_graphdb(query_new).get("boolean", False))
+
     def test_download_owl_success(self):
         res = self.app.get('/api/v1.0/download_owl/')
         self.assertEqual(res.status_code, 200)

@@ -365,6 +365,50 @@ paths:
         '500':
           $ref: '#/components/responses/UnexpectedError'
 
+  /replace_value/:
+    post:
+      tags: [mutations]
+      operationId: replaceValue
+      summary: Atomically replace one specific property value (direct SPARQL)
+      description: >
+        Replaces one stored value with another in a single SPARQL update. The old value
+        is matched by value equality (dangling references allowed); the new value keeps
+        its exact datatype and language tag. When the old value no longer exists, the
+        update is a no-op.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instance, property, old_value, new_value]
+              properties:
+                instance:
+                  type: string
+                  description: Instance identifier.
+                property:
+                  type: string
+                  description: Property name (without the `has_` prefix).
+                old_value:
+                  description: The currently stored value to replace.
+                  oneOf:
+                    - $ref: '#/components/schemas/ObjectValueTarget'
+                    - $ref: '#/components/schemas/LiteralValueTarget'
+                new_value:
+                  description: The replacement value.
+                  oneOf:
+                    - $ref: '#/components/schemas/ObjectValueTarget'
+                    - $ref: '#/components/schemas/LiteralValueTarget'
+      responses:
+        '201':
+          $ref: '#/components/responses/EmptyCreated'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/GraphDBUnavailable'
+        '500':
+          $ref: '#/components/responses/UnexpectedError'
+
   /delete_value/:
     post:
       tags: [mutations]
