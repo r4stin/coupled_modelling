@@ -3,7 +3,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../backend')))
 
 import unittest
-from main import serialize_iri, serialize_literal, serialize_object, validate_local_name
+from main import serialize_iri, serialize_literal, serialize_metadata_value, serialize_object, validate_local_name
 
 class TestSerialization(unittest.TestCase):
     def test_validate_local_name(self):
@@ -73,6 +73,30 @@ class TestSerialization(unittest.TestCase):
         self.assertEqual(serialize_object(True), '"true"^^xsd:boolean')
         self.assertEqual(serialize_object(100), '"100"^^xsd:integer')
         self.assertEqual(serialize_object(2.5), '"2.5"^^xsd:double')
+
+
+
+class TestSerializeMetadataValue(unittest.TestCase):
+    def test_language_tagged_literal(self):
+        term = serialize_metadata_value({"kind": "literal", "value": "Ein Löser", "language": "de"})
+        self.assertEqual(term, '"Ein Löser"@de')
+
+    def test_any_uri_value_serializes_as_iri_term(self):
+        term = serialize_metadata_value(
+            {"kind": "literal", "value": "http://example.org/doc", "datatype": "http://www.w3.org/2001/XMLSchema#anyURI"}
+        )
+        self.assertEqual(term, "<http://example.org/doc>")
+
+    def test_any_uri_value_rejects_invalid_characters(self):
+        with self.assertRaises(ValueError):
+            serialize_metadata_value(
+                {"kind": "literal", "value": "http://evil> . } DROP", "datatype": "http://www.w3.org/2001/XMLSchema#anyURI"}
+            )
+
+    def test_object_reference_skips_existence_check_when_not_required(self):
+        term = serialize_metadata_value({"kind": "object", "id": "instance_dangling"}, require_existing=False)
+        self.assertEqual(term, "<http://coupled_modelling.owl#instance_dangling>")
+
 
 if __name__ == "__main__":
     unittest.main()

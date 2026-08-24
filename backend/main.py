@@ -135,18 +135,39 @@ def escape_string_content(val):
     )
 
 
-def serialize_metadata_value(value_obj):
-    """Converts structured value metadata objects (from the frontend UI) into valid SPARQL terms."""
+def serialize_metadata_value(value_obj, require_existing=True):
+    """Converts structured value metadata objects (from the frontend UI) into valid SPARQL terms.
+
+    Args:
+        value_obj: Scalar value or a typed dict ({kind: object|literal, ...}).
+        require_existing: When False, object references are serialized without the
+            existence check — deletions must be able to target dangling links.
+    """
     if not isinstance(value_obj, dict):
         return serialize_object(value_obj)
-    
+
     kind = value_obj.get("kind")
     if kind == "object":
         id_val = value_obj.get("id")
-        if not instance_exists(id_val):
+        if require_existing and not instance_exists(id_val):
             raise ValueError(f"Referenced instance {id_val} does not exist in GraphDB.")
         return serialize_iri(id_val)
-    
+
+    language = value_obj.get("language")
+    if language:
+        # Language-tagged literals are only term-equal with their tag ("val"@de).
+        validate_local_name(language)
+        escaped = escape_string_content(value_obj.get("value"))
+        return f'"{escaped}"@{language}'
+
+    if value_obj.get("datatype") == "http://www.w3.org/2001/XMLSchema#anyURI":
+        # The metadata read presents external IRI objects as anyURI pseudo-literals;
+        # the stored triple object is an IRI term and must be serialized as one.
+        uri = str(value_obj.get("value"))
+        if any(ch in uri for ch in '<>"{}|\\^`') or any(ch.isspace() for ch in uri):
+            raise ValueError("Invalid characters in IRI value.")
+        return f"<{uri}>"
+
     val = value_obj.get("value")
     datatype = value_obj.get("datatype")
     
@@ -1060,11 +1081,21 @@ def delete_value_sparql(subj, prop_name, value=None):
     
     if value is not None:
         if isinstance(value, dict) and ("kind" in value or "value" in value or "id" in value):
-            obj_term = serialize_metadata_value(value)
+            # Deletions must also match dangling references and non-canonical lexical
+            # forms ("1.50"^^xsd:double vs "1.5"), so: no existence check, and matching
+            # by SPARQL value equality instead of exact-term DELETE DATA.
+            obj_term = serialize_metadata_value(value, require_existing=False)
             query = f"""
-            DELETE DATA {{
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            DELETE {{
                 GRAPH <http://coupled_modelling.owl> {{
-                    {subj_iri} {pred_iri} {obj_term} .
+                    {subj_iri} {pred_iri} ?old_val .
+                }}
+            }}
+            WHERE {{
+                GRAPH <http://coupled_modelling.owl> {{
+                    {subj_iri} {pred_iri} ?old_val .
+                    FILTER(?old_val = {obj_term})
                 }}
             }}
             """

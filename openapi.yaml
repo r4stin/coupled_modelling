@@ -386,7 +386,13 @@ paths:
                   description: Property name (without the `has_` prefix).
                   example: parallel_type
                 value:
-                  $ref: '#/components/schemas/ScalarValue'
+                  description: >
+                    The value to delete. The typed forms delete the exact triple (correct
+                    datatype serialization); a bare scalar is matched by serialization guess.
+                  oneOf:
+                    - $ref: '#/components/schemas/ObjectValueTarget'
+                    - $ref: '#/components/schemas/LiteralValueTarget'
+                    - $ref: '#/components/schemas/ScalarValue'
       responses:
         '201':
           $ref: '#/components/responses/EmptyCreated'
@@ -1018,6 +1024,37 @@ components:
         label:
           type: string
           description: Preferred label, falling back to the local name.
+
+    ObjectValueTarget:
+      type: object
+      description: Targets an object-property triple pointing at the referenced instance.
+      required: [kind, id]
+      properties:
+        kind:
+          type: string
+          const: object
+        id:
+          type: string
+          description: Identifier of the linked instance the triple points at.
+
+    LiteralValueTarget:
+      type: object
+      description: Targets a literal triple; the datatype and language tag drive term serialization.
+      required: [kind, value]
+      properties:
+        kind:
+          type: string
+          const: literal
+        value:
+          $ref: '#/components/schemas/ScalarValue'
+        datatype:
+          type: string
+          description: XSD datatype IRI of the literal (defaults to plain string serialization).
+          example: http://www.w3.org/2001/XMLSchema#integer
+        language:
+          type: string
+          description: Language tag of the literal — required to match language-tagged triples ("value"@de).
+          example: de
 
     ObjectPropertyValue:
       type: object

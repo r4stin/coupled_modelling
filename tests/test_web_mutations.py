@@ -204,7 +204,10 @@ class TestWebMutations(unittest.TestCase):
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
         self.assertEqual(res.status_code, 400)
 
-    def test_delete_value_validation_object_missing(self):
+    def test_delete_value_dangling_object_reference_allowed(self):
+        # Contract change: deleting a link whose target no longer exists must succeed —
+        # it is the recovery operation for dangling references, so the existence check
+        # that guards additions does not apply to deletions.
         payload = {
             "instance": self.test_inst,
             "property": "connect_to",
@@ -214,7 +217,7 @@ class TestWebMutations(unittest.TestCase):
             }
         }
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
-        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.status_code, 201)
 
     def test_download_owl_success(self):
         res = self.app.get('/api/v1.0/download_owl/')
