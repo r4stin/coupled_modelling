@@ -19,12 +19,9 @@ class TestWebMutations(unittest.TestCase):
         cls.onto_uri = "http://coupled_modelling.owl"
         
         # Patch main.instance_name to use our test-run prefix
-        cls.original_instance_name = main.instance_name
-        def mock_instance_name(use_uuid=True):
-            if use_uuid:
-                import uuid as u
-                return f"{cls.test_prefix}{u.uuid4()}"
-            return cls.original_instance_name(use_uuid=False)
+        def mock_instance_name():
+            import uuid as u
+            return f"{cls.test_prefix}{u.uuid4()}"
             
         cls.patcher = patch('main.instance_name', side_effect=mock_instance_name)
         cls.patcher.start()

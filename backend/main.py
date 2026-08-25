@@ -1,6 +1,7 @@
 from owlready2 import *
 import types
 import os
+import uuid
 import requests
 import io
 import xml.etree.ElementTree as ET
@@ -354,6 +355,15 @@ def save_locally():
     onto.save(get_onto_path())
 
 
+def search_labeled(name, kind):
+    """
+    Finds the entity labeled `name` of the given kind (ThingClass,
+    PropertyClass). The label search spans every entity, and individuals can
+    share a label with a class or property, so the kind filter is mandatory.
+    """
+    return next((match for match in onto.search(label = name) if isinstance(match, kind)), None)
+
+
 def get_class(name):
     """
     Gets or creates an OWL-class with a given name, which is used as the class URI and its label.
@@ -362,7 +372,7 @@ def get_class(name):
         name (str): Name of the class.
     """
     with onto:
-        cl = onto.search_one(label = name)
+        cl = search_labeled(name, ThingClass)
         if not cl:
             cl = types.new_class(name, (Thing,))
             cl.label = name
@@ -381,7 +391,10 @@ def get_relation(name, functional = False):
     #    name = 'data_'
     name = f'has_{name}'
     with onto:
-        rel = onto.search_one(label = name)
+        # One property entity per name: a same-named property of the other kind
+        # is reused rather than re-declared, because redeclaring an existing IRI
+        # via types.new_class puns it into both kinds (invalid OWL DL).
+        rel = search_labeled(name, PropertyClass)
         if not rel:
             if functional:
                 rel = types.new_class(name, (ObjectProperty, FunctionalProperty))
@@ -401,7 +414,8 @@ def get_property(name, functional = False):
     """
     name = f'has_{name}'
     with onto:
-        prop = onto.search_one(label = name)
+        # Same sharing rule as get_relation: never redeclare an existing name.
+        prop = search_labeled(name, PropertyClass)
         if not prop:
             if functional:
                 prop = types.new_class(name, (DataProperty, FunctionalProperty))
@@ -411,12 +425,13 @@ def get_property(name, functional = False):
         return prop
 
 
-def instance_name(use_uuid=True):
-    if use_uuid:
-        import uuid
-        return f"instance_{uuid.uuid4()}"
-    n = len(list(onto.individuals())) + 1
-    return f'instance_{n}'
+def instance_name():
+    """
+    Returns a fresh unique instance name. UUID-based: the old sequential counter
+    collided with existing names after deletions, and Owlready2 silently reuses
+    an existing individual on a name collision.
+    """
+    return f"instance_{uuid.uuid4()}"
 
 
 def has_only_label(inst):
@@ -428,12 +443,12 @@ def has_only_label(inst):
 def dict_to_inst(inst, pred_name, data, functional=False):
     obj_cl = get_class(pred_name)
     rel = get_relation(pred_name, functional)
-    obj_inst = obj_cl(instance_name(use_uuid=False))
+    obj_inst = obj_cl(instance_name())
     for inst_pred_name, inst_obj_data in data.items():
         obj_inst = add_coupled_system(obj_inst, inst_pred_name, inst_obj_data)
-        if obj_inst not in rel[inst]:
-            print('dict', inst, rel, obj_inst)
-            rel[inst].append(obj_inst)
+    # Link after populating so an empty dict still attaches the child.
+    if obj_inst not in rel[inst]:
+        rel[inst].append(obj_inst)
 
 
 def str_to_inst(inst, pred_name, label, functional=False):
@@ -442,24 +457,23 @@ def str_to_inst(inst, pred_name, label, functional=False):
     res = onto.search(label = label)
     obj_inst = None
     for item in res:
-        if has_only_label(item):
+        # Classes and properties can share the label; only individuals qualify.
+        if isinstance(item, Thing) and has_only_label(item):
             obj_inst = item
             break
     if obj_inst:
         if not obj_cl in obj_inst.is_a:
             obj_inst.is_a.append(obj_cl)
     else:
-        obj_inst = obj_cl(instance_name(use_uuid=False))
+        obj_inst = obj_cl(instance_name())
         obj_inst.label = [label]
     if obj_inst not in rel[inst]:
-        print('str', inst, rel, obj_inst)
         rel[inst].append(obj_inst)
 
 
 def num_to_literal(inst, pred_name, num, functional=False):
     prop = get_property(pred_name, functional)
     if num not in prop[inst]:
-        print('num', inst, prop, num)
         prop[inst].append(num)
 
 
@@ -475,20 +489,15 @@ def add_coupled_system(inst, pred_name, obj_data):
     with onto:
         if type(obj_data) == dict and all([type(obj_value) == dict for obj_key, obj_value in obj_data.items()]):
             rel = get_relation(pred_name)
+            obj_cl = get_class(pred_name)
             for obj_key, obj_value in obj_data.items():
-                obj_cl = get_class(pred_name)
-                #obj_inst = onto.search_one(label = obj_key)
-                #if obj_inst:
-                #    if not obj_cl in obj_inst.is_a:
-                #        obj_inst.is_a.append(obj_cl)
-                #else:
-                obj_inst = obj_cl(instance_name(use_uuid=False))
+                obj_inst = obj_cl(instance_name())
                 obj_inst.label = obj_key
                 for inst_pred_name, inst_obj_data in obj_value.items():
                     obj_inst = add_coupled_system(obj_inst, inst_pred_name, inst_obj_data)
-                    if obj_inst not in rel[inst]:
-                        print('dict_dict', inst, rel, obj_inst)
-                        rel[inst].append(obj_inst)
+                # Link after populating so an empty entry still attaches its child.
+                if obj_inst not in rel[inst]:
+                    rel[inst].append(obj_inst)
         elif type(obj_data) == dict:
             dict_to_inst(inst, pred_name, obj_data)
         elif type(obj_data) == list:
@@ -519,7 +528,7 @@ def create_coupled(label):
     """
     with onto:
         coupled_system = get_class('coupled_system')
-        inst = coupled_system(instance_name(use_uuid=False))
+        inst = coupled_system(instance_name())
         inst.label = label
     return inst.name
 
@@ -616,7 +625,7 @@ def get_subclasses(class_label):
         return subclasses
     except Exception as e:
         print(f"GraphDB query failed in get_subclasses: {e}. Falling back to Owlready2.")
-        cl = onto.search_one(label = class_label)
+        cl = search_labeled(class_label, ThingClass)
         if cl:
             return [x.name for x in cl.subclasses()]
         return []
@@ -892,7 +901,7 @@ def resolve_or_create_instance_by_label(class_label, label):
     validate_class_exists_in_graphdb(class_label)
     class_iri = serialize_iri(class_label)
     label_literal = serialize_literal(label)
-    new_ref_name = instance_name(use_uuid=True)
+    new_ref_name = instance_name()
     new_ref_iri = serialize_iri(new_ref_name)
     
     create_query = f"""
@@ -942,7 +951,7 @@ def add_value(subj, prop_name, value=None):
     if value == None:
         cl = get_class(prop_name)
         with onto:
-            value = cl(instance_name(use_uuid=False))
+            value = cl(instance_name())
         prop = get_relation(prop_name)
         prop[subj].append(value)
     elif type(value) == str and not value.startswith('http'):
@@ -1022,7 +1031,7 @@ def add_value_sparql(subj, prop_name, value=None):
     
     if value is None:
         validate_class_exists_in_graphdb(prop_name)
-        new_inst_name = instance_name(use_uuid=True)
+        new_inst_name = instance_name()
         new_inst_iri = serialize_iri(new_inst_name)
         class_iri = serialize_iri(prop_name)
         
@@ -1293,7 +1302,7 @@ def add_values_sparql(inst, data):
                 if object_property:
                     existing = resolve_instance_by_label(prop_name, val) or pending_creations.get((prop_name, val))
                     if existing is None:
-                        new_ref = instance_name(use_uuid=True)
+                        new_ref = instance_name()
                         new_iri = serialize_iri(new_ref)
                         creation_triples.append(f"{new_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> {serialize_iri(prop_name)} .")
                         creation_triples.append(f"{new_iri} {get_property_iri('label')} {serialize_literal(val)} .")
@@ -1388,7 +1397,7 @@ def create_instance_sparql(prop_name, parent, data=None):
     validate_class_exists_in_graphdb(prop_name)
     
     # Generate UUID for the new instance
-    new_inst_name = instance_name(use_uuid=True)
+    new_inst_name = instance_name()
     new_inst_iri = serialize_iri(new_inst_name)
     
     # Retrieve range class of the property
@@ -1444,7 +1453,7 @@ def create_instance_sparql(prop_name, parent, data=None):
 def create_class_instance_sparql(class_name, label):
     """Creates a standalone class instance with rdfs:label in GraphDB."""
     validate_class_exists_in_graphdb(class_name)
-    new_name = instance_name(use_uuid=True)
+    new_name = instance_name()
     new_iri = serialize_iri(new_name)
     class_iri = serialize_iri(class_name)
     label_iri = get_property_iri("label")
@@ -1555,7 +1564,7 @@ def copy_instance(inst, parent=None, data=None):
     with onto:
         inst = onto[inst]
         cl = type(inst)
-        new_inst = cl(instance_name(use_uuid=False))
+        new_inst = cl(instance_name())
 
         if parent:
             parent = onto[parent]
@@ -1697,31 +1706,32 @@ def force_list():
     ]
 
 
-def get_connected_instances_recursively(inst_name, insts, depth):
+def get_connected_instances_recursively(inst_name, insts, depth, path=frozenset()):
     """
-    For a given instance, returns its connected instances.
+    Collects the instances reachable from `inst_name` into `insts` in place.
+
+    Keeps the MAXIMUM depth per instance so a shared instance always ends up
+    deeper than every parent — infer_class_properties_recursively processes
+    deepest-first and needs children inferred before their parents.
 
     Args:
         inst_name (str): Instance name.
-        insts (list): List of instances.
-        depth (int): Depth of the instance tree.
-
-    Returns:
-        A list of connected instance names.
+        insts (dict): Maps each visited instance to its maximal depth; mutated in place.
+        depth (int): Depth of the current visit.
+        path (frozenset): Instances on the current descent, to cut cycles.
     """
     inst = onto[inst_name]
-    #if insts.get(inst):
-    #    if insts[inst] > depth:
-    #        pass
-    #    else:
-    #        insts[inst] = depth
-    #else:
+    if inst in path:
+        return
+    if inst in insts and insts[inst] >= depth:
+        return
     insts[inst] = depth
+    child_path = path | {inst}
     depth += 1
     for prop in inst.get_properties():
         for value in prop[inst]:
             if hasattr(value, 'name'):
-                get_connected_instances_recursively(value.name, insts, depth)
+                get_connected_instances_recursively(value.name, insts, depth, child_path)
 
 
 def infer_class_properties(inst):

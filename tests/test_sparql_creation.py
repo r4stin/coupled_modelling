@@ -19,12 +19,9 @@ class TestSparqlCreation(unittest.TestCase):
         cls.onto_uri = "http://coupled_modelling.owl"
         
         # Patch main.instance_name to use our test-run prefix
-        cls.original_instance_name = main.instance_name
-        def mock_instance_name(use_uuid=True):
-            if use_uuid:
-                import uuid as u
-                return f"{cls.test_prefix}{u.uuid4()}"
-            return cls.original_instance_name(use_uuid=False)
+        def mock_instance_name():
+            import uuid as u
+            return f"{cls.test_prefix}{u.uuid4()}"
             
         cls.patcher = patch('main.instance_name', side_effect=mock_instance_name)
         cls.patcher.start()
@@ -102,15 +99,11 @@ class TestSparqlCreation(unittest.TestCase):
                 pass
 
     def test_instance_name_generates_uuid(self):
-        name_1 = main.instance_name(use_uuid=True)
-        name_2 = main.instance_name(use_uuid=True)
+        name_1 = main.instance_name()
+        name_2 = main.instance_name()
         self.assertNotEqual(name_1, name_2)
         self.assertTrue(name_1.startswith(self.__class__.test_prefix))
         self.assertEqual(len(name_1), len(self.__class__.test_prefix) + 36)
-
-        seq_name = main.instance_name(use_uuid=False)
-        self.assertTrue(seq_name.startswith("instance_"))
-        self.assertTrue(len(seq_name) < 20)
 
     def test_direct_create_instance(self):
         data = {
