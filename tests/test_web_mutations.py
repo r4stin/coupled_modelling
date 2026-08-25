@@ -334,5 +334,137 @@ class TestWebMutations(unittest.TestCase):
         self.assertEqual(delete_res.get_json().get("instance"), inst_id)
         self.assertFalse(main.instance_exists(inst_id))
 
+    def test_add_values_accepts_literal_on_datatype_property(self):
+        payload = {
+            "instance": self.test_inst,
+            "data": {"num_coupling_iterations": 12}
+        }
+        res = self.app.post('/api/v1.0/add_values/', json=payload)
+        self.assertEqual(res.status_code, 201)
+
+        query = f"""
+        ASK {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_num_coupling_iterations> "12"^^xsd:integer .
+            }}
+        }}
+        """
+        self.assertTrue(main.query_graphdb(query).get("boolean", False))
+
+    def test_add_values_resolves_label_to_existing_instance(self):
+        # Labels resolve globally, so keep them unique per test run: a leftover
+        # from a crashed or concurrent run must not be able to satisfy LIMIT 1.
+        label = f"Existing Label Target {self.test_prefix}"
+        create_res = self.app.post('/api/v1.0/create_class_instance/', json={
+            "class": "solver",
+            "label": label
+        })
+        self.assertEqual(create_res.status_code, 201)
+        target_id = create_res.get_json()
+
+        res = self.app.post('/api/v1.0/add_values/', json={
+            "instance": self.test_inst,
+            "data": {"solver": label}
+        })
+        self.assertEqual(res.status_code, 201)
+
+        query = f"""
+        ASK {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_solver> <http://coupled_modelling.owl#{target_id}> .
+            }}
+        }}
+        """
+        self.assertTrue(main.query_graphdb(query).get("boolean", False))
+
+    def test_add_values_creates_labeled_instance_for_unknown_label(self):
+        label = f"Brand New Label Target {self.test_prefix}"
+        res = self.app.post('/api/v1.0/add_values/', json={
+            "instance": self.test_inst,
+            "data": {"solver": label}
+        })
+        self.assertEqual(res.status_code, 201)
+
+        query = f"""
+        SELECT ?obj WHERE {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_solver> ?obj .
+                ?obj rdf:type <http://coupled_modelling.owl#solver> .
+                ?obj <http://www.w3.org/2000/01/rdf-schema#label> "{label}"^^xsd:string .
+            }}
+        }}
+        """
+        bindings = main.query_graphdb(query).get("results", {}).get("bindings", [])
+        self.assertEqual(len(bindings), 1)
+        new_ref = main.get_local_name(bindings[0]["obj"]["value"])
+        self.assertTrue(new_ref.startswith(self.test_prefix))
+
+    def test_add_values_resolves_each_label_in_a_list(self):
+        labels = [f"List Label A {self.test_prefix}", f"List Label B {self.test_prefix}"]
+        res = self.app.post('/api/v1.0/add_values/', json={
+            "instance": self.test_inst,
+            "data": {"solver": labels}
+        })
+        self.assertEqual(res.status_code, 201)
+
+        query = f"""
+        SELECT ?label WHERE {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_solver> ?obj .
+                ?obj <http://www.w3.org/2000/01/rdf-schema#label> ?label .
+                FILTER(STRSTARTS(STR(?label), "List Label"))
+            }}
+        }}
+        """
+        bindings = main.query_graphdb(query).get("results", {}).get("bindings", [])
+        self.assertEqual(sorted(b["label"]["value"] for b in bindings), labels)
+
+    def test_add_values_rejects_null_values(self):
+        res = self.app.post('/api/v1.0/add_values/', json={
+            "instance": self.test_inst,
+            "data": {"echo_level": None}
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("error", res.get_json())
+
+    def test_add_values_rejects_missing_instance_reference(self):
+        res = self.app.post('/api/v1.0/add_values/', json={
+            "instance": self.test_inst,
+            "data": {"solver": "instance_does_not_exist_999"}
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("does not exist", res.get_json().get("error", ""))
+
+    def test_add_values_invalid_reference_inserts_nothing(self):
+        orphan_label = f"Orphan Candidate {self.test_prefix}"
+        res = self.app.post('/api/v1.0/add_values/', json={
+            "instance": self.test_inst,
+            "data": {
+                "num_coupling_iterations": 77,
+                "solver": [orphan_label, "instance_does_not_exist_999"]
+            }
+        })
+        self.assertEqual(res.status_code, 400)
+
+        query = f"""
+        ASK {{
+            GRAPH <{self.onto_uri}> {{
+                <http://coupled_modelling.owl#{self.test_inst}> <http://coupled_modelling.owl#has_num_coupling_iterations> "77"^^xsd:integer .
+            }}
+        }}
+        """
+        self.assertFalse(main.query_graphdb(query).get("boolean", False))
+
+        # The label that would have been resolved-or-created must not leave an
+        # orphan instance behind when the request fails validation.
+        orphan_query = f"""
+        ASK {{
+            GRAPH <{self.onto_uri}> {{
+                ?inst <http://www.w3.org/2000/01/rdf-schema#label> "{orphan_label}"^^xsd:string .
+            }}
+        }}
+        """
+        self.assertFalse(main.query_graphdb(orphan_query).get("boolean", False))
+
 if __name__ == '__main__':
     unittest.main()

@@ -1262,32 +1262,56 @@ def delete_values_sparql(inst, props):
 def add_values_sparql(inst, data):
     """
     Adds values to the given subject instance from a dictionary of property-value pairs.
-    
-    Note: Direct implicit creation is currently supported through add_value_sparql() 
-    and create_instance_sparql(), not this batch replacement API.
+
+    Plain string values are kept as literals for datatype properties; for object
+    properties they are resolved to an existing instance of the property's class by
+    label, or a new labeled instance is created inside the same SPARQL update.
+    Null values and dangling instance references are rejected before anything is
+    written, so a failed request leaves no trace in GraphDB.
     """
     validate_subject_exists(inst)
-    
-    # Upfront validation for all properties
+
+    # Read-only pass: validate every value and resolve labels to object
+    # references. New labeled instances are only collected as triples here and
+    # created together with the subject triples in the single update below.
+    resolved_data = {}
+    creation_triples = []
+    pending_creations = {}
     for prop_name, value in data.items():
         values = value if isinstance(value, list) else [value]
+        object_property = None  # one classification query per property
+        resolved_values = []
         for val in values:
-            if val is None or (isinstance(val, str) and not val.startswith("instance") and prop_name != "label"):
-                raise ValueError("Creation of new individuals via direct SPARQL mutations is not supported except through explicit creation APIs.")
-            if isinstance(val, str) and val.startswith("instance") and not instance_exists(val):
-                raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
-                
+            if val is None:
+                raise ValueError(f"Null value for property '{prop_name}' is not supported; send a literal or an instance reference.")
+            if isinstance(val, str) and val.startswith("instance"):
+                if not instance_exists(val):
+                    raise ValueError(f"Referenced instance {val} does not exist in GraphDB.")
+            elif isinstance(val, str) and prop_name != "label":
+                if object_property is None:
+                    object_property = is_object_property_in_graphdb(prop_name)
+                if object_property:
+                    existing = resolve_instance_by_label(prop_name, val) or pending_creations.get((prop_name, val))
+                    if existing is None:
+                        new_ref = instance_name(use_uuid=True)
+                        new_iri = serialize_iri(new_ref)
+                        creation_triples.append(f"{new_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> {serialize_iri(prop_name)} .")
+                        creation_triples.append(f"{new_iri} {get_property_iri('label')} {serialize_literal(val)} .")
+                        pending_creations[(prop_name, val)] = new_ref
+                        existing = new_ref
+                    val = existing
+            resolved_values.append(val)
+        resolved_data[prop_name] = resolved_values
+
     subj_iri = serialize_subject(inst)
-    triples = []
-    
-    for prop_name, value in data.items():
+    triples = list(creation_triples)
+
+    for prop_name, values in resolved_data.items():
         pred_iri = get_property_iri(prop_name)
-        values = value if isinstance(value, list) else [value]
         for val in values:
-            if val is not None:
-                obj_val = serialize_object(val)
-                triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
-        
+            obj_val = serialize_object(val)
+            triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
+
     if triples:
         query = f"""
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
