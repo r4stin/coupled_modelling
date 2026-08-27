@@ -269,7 +269,7 @@ class TestWebExplorer(unittest.TestCase):
         self.assertEqual(inst["property_preview"][0]["value"], 2)
         self.assertEqual(inst["property_preview"][1]["property"], "start_time")
         self.assertEqual(inst["property_preview"][1]["value"], 0.0)
-        self.assertEqual(inst["property_preview"][2]["property"], "has_solver")
+        self.assertEqual(inst["property_preview"][2]["property"], "solver")
         self.assertEqual(inst["property_preview"][2]["value"], "CFD Solver")
         self.assertEqual(inst["property_preview"][2]["kind"], "object")
         
@@ -281,6 +281,30 @@ class TestWebExplorer(unittest.TestCase):
     def test_get_instance_property_metadata_parsing(self, mock_val, mock_query):
         """Verify properties aggregation, namespace type filtering, and datatype mappings."""
         def mock_query_responses(query):
+            # Batched lookups describing the linked objects (types, preview).
+            if "SELECT ?inst ?type" in query:
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "inst": {"value": "http://coupled_modelling.owl#solver_1"},
+                                "type": {"value": "http://coupled_modelling.owl#solver"}
+                            }
+                        ]
+                    }
+                }
+            if "SELECT ?inst ?prop ?obj" in query:
+                return {
+                    "results": {
+                        "bindings": [
+                            {
+                                "inst": {"value": "http://coupled_modelling.owl#solver_1"},
+                                "prop": {"value": "http://coupled_modelling.owl#has_name"},
+                                "obj": {"type": "literal", "value": "CFD", "datatype": "http://www.w3.org/2001/XMLSchema#string"}
+                            }
+                        ]
+                    }
+                }
             if "rdf:type ?type" in query:
                 return {
                     "results": {
@@ -348,6 +372,10 @@ class TestWebExplorer(unittest.TestCase):
         self.assertEqual(res["properties"][2]["values"][0]["kind"], "object")
         self.assertEqual(res["properties"][2]["values"][0]["id"], "solver_1")
         self.assertEqual(res["properties"][2]["values"][0]["label"], "CFD_Solver") # English label preferred
+        # The linked object is described by its class and a property preview.
+        self.assertEqual(res["properties"][2]["values"][0]["types"], ["solver"])
+        self.assertEqual(res["properties"][2]["values"][0]["property_preview"], [{"property": "name", "value": "CFD", "kind": "literal"}])
+        self.assertFalse(res["properties"][2]["values"][0]["preview_truncated"])
 
     @patch('api.get_class_metadata')
     def test_get_class_metadata_error_503(self, mock_helper):

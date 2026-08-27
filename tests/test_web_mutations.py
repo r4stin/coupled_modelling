@@ -331,6 +331,28 @@ class TestWebMutations(unittest.TestCase):
         self.assertEqual(delete_res.get_json().get("instance"), inst_id)
         self.assertFalse(main.instance_exists(inst_id))
 
+    def test_instance_metadata_describes_linked_objects(self):
+        # Re-assert the link: sibling tests in this class delete the fixture's
+        # connect_to triple, and test order must not matter.
+        add_res = self.app.post('/api/v1.0/add_values/', json={
+            "instance": self.test_inst,
+            "data": {"connect_to": self.test_obj}
+        })
+        self.assertEqual(add_res.status_code, 201)
+
+        res = self.app.get(f'/api/v1.0/get_instance_property_metadata/?instance={self.test_inst}')
+        self.assertEqual(res.status_code, 200)
+        groups = {group["property"]: group["values"] for group in res.get_json()["properties"]}
+
+        linked = groups["connect_to"][0]
+        self.assertEqual(linked["kind"], "object")
+        self.assertEqual(linked["id"], self.test_obj)
+        # The unlabeled target still gets described: its class and a preview.
+        self.assertEqual(linked["label"], self.test_obj)
+        self.assertEqual(linked["types"], ["solver"])
+        self.assertIn({"property": "name", "value": "ExistingObject", "kind": "literal"}, linked["property_preview"])
+        self.assertFalse(linked["preview_truncated"])
+
     def test_add_values_accepts_literal_on_datatype_property(self):
         payload = {
             "instance": self.test_inst,

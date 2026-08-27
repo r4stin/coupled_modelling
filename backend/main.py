@@ -1946,6 +1946,161 @@ def get_class_hierarchy_metadata():
     return result
 
 
+PREVIEW_LIMIT = 3
+
+# Keeps batched VALUES clauses bounded for hub instances with many links.
+BATCH_QUERY_CHUNK = 200
+
+
+def coerce_literal(value, datatype):
+    """Converts a SPARQL literal's lexical form to the matching Python type."""
+    if datatype == "http://www.w3.org/2001/XMLSchema#boolean":
+        return value.lower() == "true"
+    if datatype == "http://www.w3.org/2001/XMLSchema#integer":
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if datatype in (
+        "http://www.w3.org/2001/XMLSchema#double",
+        "http://www.w3.org/2001/XMLSchema#float",
+        "http://www.w3.org/2001/XMLSchema#decimal",
+    ):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    return value
+
+
+def chunked(items, size=BATCH_QUERY_CHUNK):
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+def collect_preview_candidates(inst_ids):
+    """
+    Batched preview collection: for every given instance id, its outgoing
+    statements (minus rdf:type / rdfs:label) with object labels resolved.
+    Returns {inst_id: [{"property", "value", "kind"}, ...]}.
+    """
+    if not inst_ids:
+        return {}
+
+    groups_by_inst = {inst_id: {} for inst_id in inst_ids}
+    for chunk in chunked(list(inst_ids)):
+        uris_str = " ".join(f"<{get_uri(inst_id)}>" for inst_id in chunk)
+        prop_query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT ?inst ?prop ?obj ?obj_label (LANG(?obj_label) AS ?obj_lang) WHERE {{
+            GRAPH <{onto_uri}> {{
+                VALUES ?inst {{ {uris_str} }}
+                ?inst ?prop ?obj .
+                FILTER (?prop != rdf:type && ?prop != rdfs:label)
+                OPTIONAL {{
+                    FILTER(isIRI(?obj))
+                    ?obj rdfs:label ?obj_label .
+                }}
+            }}
+        }}
+        """
+        prop_res = query_graphdb(prop_query)
+
+        for binding in prop_res.get("results", {}).get("bindings", []):
+            inst_id = get_local_name(binding["inst"]["value"])
+            if inst_id not in groups_by_inst:
+                continue
+
+            prop_uri = binding["prop"]["value"]
+            if prop_uri in (
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+                "http://www.w3.org/2000/01/rdf-schema#label",
+            ):
+                continue
+
+            # Same display convention as the property groups: no has_ prefix.
+            prop_name = get_local_name(prop_uri).replace('has_', '')
+
+            obj_binding = binding["obj"]
+            obj_val = obj_binding["value"]
+            # Same classification as the property groups: IRIs outside the
+            # ontology namespace are anyURI literals, not instance links.
+            is_literal = obj_binding.get("type") == "literal" or not obj_val.startswith(get_uri(''))
+
+            key = (prop_name, obj_val, is_literal)
+            if key not in groups_by_inst[inst_id]:
+                groups_by_inst[inst_id][key] = {
+                    "datatype": obj_binding.get("datatype", ""),
+                    "labels": []
+                }
+            if not is_literal and "obj_label" in binding:
+                lang = binding.get("obj_lang", {}).get("value", "")
+                val = binding["obj_label"]["value"]
+                groups_by_inst[inst_id][key]["labels"].append((lang, val))
+
+    candidates_by_inst = {}
+    for inst_id, groups in groups_by_inst.items():
+        candidates = []
+        for (prop_name, obj_val, is_literal), details in groups.items():
+            if is_literal:
+                value = coerce_literal(obj_val, details["datatype"])
+                kind = "literal"
+            else:
+                obj_id = get_local_name(obj_val)
+                value = select_preferred_label(details["labels"], obj_id)
+                kind = "object"
+
+            candidates.append({
+                "property": prop_name,
+                "value": value,
+                "kind": kind
+            })
+        candidates_by_inst[inst_id] = candidates
+    return candidates_by_inst
+
+
+def summarize_preview(candidates, limit=PREVIEW_LIMIT):
+    """Dedupes, orders (literals before object links), and caps preview candidates."""
+    seen = set()
+    deduped = []
+    for c in candidates:
+        key = (c["property"], str(c["value"]), c["kind"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+
+    deduped.sort(key=lambda c: (c["kind"] != "literal", c["property"], str(c["value"])))
+    return deduped[:limit], len(deduped) > limit
+
+
+def collect_instance_types(inst_ids):
+    """Batched rdf:type lookup: returns {inst_id: sorted local type names}."""
+    if not inst_ids:
+        return {}
+
+    types_by_inst = {inst_id: set() for inst_id in inst_ids}
+    for chunk in chunked(list(inst_ids)):
+        uris_str = " ".join(f"<{get_uri(inst_id)}>" for inst_id in chunk)
+        query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        SELECT ?inst ?type WHERE {{
+            GRAPH <{onto_uri}> {{
+                VALUES ?inst {{ {uris_str} }}
+                ?inst rdf:type ?type .
+                FILTER (STRSTARTS(STR(?type), "{get_uri('')}"))
+            }}
+        }}
+        """
+        res = query_graphdb(query)
+        for binding in res.get("results", {}).get("bindings", []):
+            inst_id = get_local_name(binding["inst"]["value"])
+            if inst_id in types_by_inst:
+                types_by_inst[inst_id].add(get_local_name(binding["type"]["value"]))
+    return {inst_id: sorted(types) for inst_id, types in types_by_inst.items()}
+
+
 def get_class_instance_summaries(class_name=None):
     """
     Returns instance summaries containing unique ID, label, and direct types list
@@ -1992,105 +2147,13 @@ def get_class_instance_summaries(class_name=None):
             val = binding["label"]["value"]
             inst_data[inst_id]["labels"].append((lang, val))
             
-    inst_candidates = {inst_id: [] for inst_id in inst_data.keys()}
-    if inst_data:
-        uris_str = " ".join(f"<{get_uri(inst_id)}>" for inst_id in inst_data.keys())
-        prop_query = f"""
-        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-        SELECT ?inst ?prop ?obj ?obj_label (LANG(?obj_label) AS ?obj_lang) WHERE {{
-            GRAPH <{onto_uri}> {{
-                VALUES ?inst {{ {uris_str} }}
-                ?inst ?prop ?obj .
-                FILTER (?prop != rdf:type && ?prop != rdfs:label)
-                OPTIONAL {{
-                    FILTER(isIRI(?obj))
-                    ?obj rdfs:label ?obj_label .
-                }}
-            }}
-        }}
-        """
-        prop_res = query_graphdb(prop_query)
-        inst_candidates_group = {inst_id: {} for inst_id in inst_data.keys()}
-        
-        for binding in prop_res.get("results", {}).get("bindings", []):
-            inst_uri = binding["inst"]["value"]
-            inst_id = get_local_name(inst_uri)
-            if inst_id not in inst_candidates_group:
-                continue
-                
-            prop_uri = binding["prop"]["value"]
-            prop_name = get_local_name(prop_uri)
-            if prop_name in ("type", "label"):
-                continue
-                
-            obj_binding = binding["obj"]
-            is_literal = (obj_binding.get("type") == "literal")
-            obj_val = obj_binding["value"]
-            
-            key = (prop_name, obj_val, is_literal)
-            if key not in inst_candidates_group[inst_id]:
-                inst_candidates_group[inst_id][key] = {
-                    "datatype": obj_binding.get("datatype", ""),
-                    "labels": []
-                }
-            if not is_literal and "obj_label" in binding:
-                lang = binding.get("obj_lang", {}).get("value", "")
-                val = binding["obj_label"]["value"]
-                inst_candidates_group[inst_id][key]["labels"].append((lang, val))
-                
-        for inst_id, groups in inst_candidates_group.items():
-            candidates = []
-            for (prop_name, obj_val, is_literal), details in groups.items():
-                if is_literal:
-                    value = obj_val
-                    dt = details["datatype"]
-                    if "boolean" in dt:
-                        value = (value.lower() == "true")
-                    elif "integer" in dt or "int" in dt:
-                        try: value = int(value)
-                        except: pass
-                    elif "double" in dt or "decimal" in dt or "float" in dt:
-                        try: value = float(value)
-                        except: pass
-                    kind = "literal"
-                else:
-                    obj_id = get_local_name(obj_val)
-                    value = select_preferred_label(details["labels"], obj_id)
-                    kind = "object"
-                    
-                candidates.append({
-                    "property": prop_name,
-                    "value": value,
-                    "kind": kind
-                })
-            inst_candidates[inst_id] = candidates
-            
+    inst_candidates = collect_preview_candidates(list(inst_data.keys()))
+
     summaries = []
     for inst_id, data in inst_data.items():
         selected_label = select_preferred_label(data["labels"], inst_id)
-        
-        candidates = inst_candidates.get(inst_id, [])
-        seen = set()
-        literals = []
-        objects = []
-        for c in candidates:
-            key = (c["property"], str(c["value"]), c["kind"])
-            if key in seen:
-                continue
-            seen.add(key)
-            if c["kind"] == "literal":
-                literals.append(c)
-            else:
-                objects.append(c)
-                
-        literals.sort(key=lambda x: (x["property"], str(x["value"])))
-        objects.sort(key=lambda x: (x["property"], str(x["value"])))
-        
-        combined = literals + objects
-        preview = combined[:3]
-        truncated = len(combined) > 3
-        
+        preview, truncated = summarize_preview(inst_candidates.get(inst_id, []))
+
         summaries.append({
             "id": inst_id,
             "label": selected_label,
@@ -2202,16 +2265,27 @@ def get_instance_property_metadata(inst_name):
                 prop_literals[prop_name] = []
             prop_literals[prop_name].append(literal_dict)
             
+    # Linked instances also carry their types and a property preview, so the
+    # inspector can describe unlabeled targets instead of showing a bare id.
+    object_ids = sorted({obj_id for obj_dict in prop_objects.values() for obj_id in obj_dict})
+    types_by_obj = collect_instance_types(object_ids)
+    candidates_by_obj = collect_preview_candidates(object_ids)
+    previews_by_obj = {obj_id: summarize_preview(candidates) for obj_id, candidates in candidates_by_obj.items()}
+
     properties_map = {}
     for prop_name, obj_dict in prop_objects.items():
         if prop_name not in properties_map:
             properties_map[prop_name] = []
         for obj_id, labels_list in obj_dict.items():
             selected_obj_lbl = select_preferred_label(labels_list, obj_id)
+            preview, truncated = previews_by_obj.get(obj_id, ([], False))
             properties_map[prop_name].append({
                 "kind": "object",
                 "id": obj_id,
-                "label": selected_obj_lbl
+                "label": selected_obj_lbl,
+                "types": types_by_obj.get(obj_id, []),
+                "property_preview": preview,
+                "preview_truncated": truncated
             })
             
     for prop_name, literal_list in prop_literals.items():

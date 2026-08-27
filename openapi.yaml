@@ -1108,7 +1108,7 @@ components:
 
     ObjectPropertyValue:
       type: object
-      required: [kind, id, label]
+      required: [kind, id, label, types, property_preview, preview_truncated]
       properties:
         kind:
           type: string
@@ -1118,7 +1118,20 @@ components:
           description: Identifier of the linked instance.
         label:
           type: string
-          description: Preferred label of the linked instance.
+          description: Preferred label of the linked instance (falls back to the id when unlabeled).
+        types:
+          type: array
+          items:
+            type: string
+          description: Local class names of the linked instance.
+        property_preview:
+          type: array
+          items:
+            $ref: '#/components/schemas/PreviewItem'
+          description: Up to three of the linked instance's property values, literals first.
+        preview_truncated:
+          type: boolean
+          description: Whether the linked instance has more property values than the preview shows.
 
     LiteralPropertyValue:
       type: object
