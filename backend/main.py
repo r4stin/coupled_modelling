@@ -364,6 +364,16 @@ def search_labeled(name, kind):
     return next((match for match in onto.search(label = name) if isinstance(match, kind)), None)
 
 
+def resolve_individual(name):
+    """
+    Resolves a value to an individual by local name, or None. A value string
+    can share its name with a class or property (keys become classes), and
+    only actual individuals may be treated as nested instances.
+    """
+    ent = onto[name] if isinstance(name, str) else None
+    return ent if isinstance(ent, Thing) else None
+
+
 def get_class(name):
     """
     Gets or creates an OWL-class with a given name, which is used as the class URI and its label.
@@ -1529,13 +1539,13 @@ def get_instance_properties_recursively(inst_name, depth=1, recursive=False):
             if type(items) == list:
                 temp_list = []
                 for item in items:
-                    if onto[item]:
+                    if resolve_individual(item) is not None:
                         temp_list.append({item: get_instance_properties_recursively(item, depth, recursive)})
                     else:
                         temp_list.append(item)
                 props[key] = temp_list
             else:
-                if onto[items]:
+                if resolve_individual(items) is not None:
                     props[key] = {items: get_instance_properties_recursively(items, depth, recursive)}
                 else:
                     props[key] = items
@@ -1645,65 +1655,63 @@ def export_coupled_kratos(coupled_system):
         Dictionary of nested properties.
     """
     props = get_instance_properties(coupled_system)
-    label = None
-    for key in list(props.keys()):
-        if key == 'label':
-            #label = props['label'][0]
-            label = props['label']
+    label = props.get('label')
     if label:
         props.pop('label', None)
-    if 'coupled_system' in str(type(onto[coupled_system]).name):
+    root = resolve_individual(coupled_system)
+    if root is not None and 'coupled_system' in str(type(root).name):
         label = None
     result = props.pop('result', None)
+
+    def export_value(value):
+        ent = resolve_individual(value)
+        if ent is None:
+            return value
+        if has_only_label(ent):
+            return ent.label[0]
+        return export_coupled_kratos(value)
+
     for key, items in props.items():
         if type(items) == list and len(items) > 1 and key in force_dict():
             temp_dict = {}
             for item in items:
+                if resolve_individual(item) is None:
+                    temp_dict[str(item)] = item
+                    continue
                 obj_props = export_coupled_kratos(item)
-                temp_dict[list(obj_props.keys())[0]] = list(obj_props.values())[0]
+                if obj_props:
+                    temp_dict[list(obj_props.keys())[0]] = list(obj_props.values())[0]
             props[key] = temp_dict
         elif (type(items) == list and len(items) > 1) or key in force_list():
-            temp_list = []
-            for item in items:
-                if onto[item]:
-                    if has_only_label(onto[item]):
-                        temp_list.append(onto[item].label[0])
-                    else:
-                        temp_list.append(export_coupled_kratos(item))
-                else:
-                    temp_list.append(item)
-            props[key] = temp_list
+            props[key] = [export_value(item) for item in items]
         else:
-            #item = items[0]
-            inst = onto[items]
-            if inst:
-                if has_only_label(inst):
-                    props[key] = inst.label[0]
-                else:
-                    props[key] = export_coupled_kratos(items)
-            else:
-                props[key] = items
+            props[key] = export_value(items)
     if label:
         props = {label: props}
     label = None
     return props
 
 
+FORCE_DICT_KEYS = frozenset({'solvers', 'data'})
+
+FORCE_LIST_KEYS = frozenset({
+    'convergence_accelerators',
+    'convergence_criteria',
+    'input_data_list',
+    'output_data_list',
+    'export_data',
+    'import_data',
+    'import_meshes',
+    'data_transfer_operator_options',
+})
+
+
 def force_dict():
-    return ['solvers', 'data']
+    return FORCE_DICT_KEYS
 
 
 def force_list():
-    return [
-        'convergence_accelerators',
-        'convergence_criteria',
-        'input_data_list',
-        'output_data_list',
-        'export_data',
-        'import_data',
-        'import_meshes',
-        'data_transfer_operator_options'
-    ]
+    return FORCE_LIST_KEYS
 
 
 def get_connected_instances_recursively(inst_name, insts, depth, path=frozenset()):

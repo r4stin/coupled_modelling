@@ -3,6 +3,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../backend')))
 
 import unittest
+from unittest.mock import patch
 import main
 
 
@@ -78,6 +79,27 @@ class TestKratosImportHelpers(unittest.TestCase):
 
         rel = main.get_relation('zz_test_dict_child')
         self.assertEqual(len(rel[holder]), 1)
+
+    def test_export_keeps_value_strings_that_share_a_class_name(self):
+        with main.onto:
+            # Classes whose local names equal incoming string values (keys
+            # become classes, so this happens across configurations).
+            main.get_class('zz_test_collide_value')
+            main.get_class('zz_test_collide_other')
+            holder_cl = main.get_class('zz_test_export_root')
+            holder = holder_cl(main.instance_name())
+            # Scalar branch: one value; list branch: two values on one property.
+            main.str_to_inst(holder, 'zz_test_export_link', 'zz_test_collide_value')
+            main.str_to_inst(holder, 'zz_test_export_multi', 'zz_test_collide_value')
+            main.str_to_inst(holder, 'zz_test_export_multi', 'zz_test_collide_other')
+
+        # Force the in-memory property path so the in-memory fixture is used;
+        # silence the fallback warning it prints per visited instance.
+        with patch('main.query_graphdb', side_effect=main.GraphDBError('down')), patch('builtins.print'):
+            exported = main.export_coupled_kratos(holder.name)
+
+        self.assertEqual(exported.get('zz_test_export_link'), 'zz_test_collide_value')
+        self.assertEqual(sorted(exported.get('zz_test_export_multi')), ['zz_test_collide_other', 'zz_test_collide_value'])
 
     def test_connected_instances_traversal_terminates_on_cycles(self):
         with main.onto:
