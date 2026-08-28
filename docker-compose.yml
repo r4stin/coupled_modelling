@@ -1,0 +1,53 @@
+# Full-stack demo: GraphDB + Flask backend + Next.js explorer.
+#
+# Requires the frontend repo cloned as a sibling directory:
+#   parent/
+#     coupled_modelling/            (this repo)
+#     coupled-modelling-frontend/
+#
+# Run from this repo:  docker compose up --build
+# Explorer:            http://localhost:3000
+#
+# Host ports are overridable via GRAPHDB_PORT / BACKEND_PORT / FRONTEND_PORT;
+# the frontend's API URL and the backend's CORS origin follow them. Re-run
+# with --build after changing BACKEND_PORT — the URL is baked into the
+# frontend bundle at build time.
+name: coupled-modelling
+
+services:
+    graphdb:
+        image: ontotext/graphdb:10.8.4
+        ports:
+            - "${GRAPHDB_PORT:-7200}:7200"
+        volumes:
+            - graphdb-data:/opt/graphdb/home
+
+    # Creates and seeds the repository on first run (backend/seed_graphdb.py),
+    # then serves the API.
+    backend:
+        build: .
+        restart: on-failure:3
+        init: true
+        ports:
+            - "${BACKEND_PORT:-5000}:5000"
+        environment:
+            GRAPHDB_URL: http://graphdb:7200
+            GRAPHDB_REPOSITORY: "${GRAPHDB_REPOSITORY:-coupled_modelling}"
+            GRAPHDB_USER: "${GRAPHDB_USER:-}"
+            GRAPHDB_PASSWORD: "${GRAPHDB_PASSWORD:-}"
+            CORS_ALLOWED_ORIGINS: "${CORS_ALLOWED_ORIGINS:-http://localhost:${FRONTEND_PORT:-3000}}"
+        depends_on:
+            - graphdb
+
+    frontend:
+        build:
+            context: ../coupled-modelling-frontend
+            args:
+                NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:${BACKEND_PORT:-5000}/api/v1.0}"
+        ports:
+            - "${FRONTEND_PORT:-3000}:3000"
+        depends_on:
+            - backend
+
+volumes:
+    graphdb-data:

@@ -1,0 +1,10 @@
+# Trims the build context; the Dockerfile's COPY list governs image contents.
+.git
+.github
+.idea
+**/__pycache__
+**/*.pyc
+tests
+examples
+docs
+CLAUDE.md

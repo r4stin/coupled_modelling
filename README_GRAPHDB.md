@@ -4,6 +4,18 @@ Follow these steps to set up the GraphDB-backed REST API and verify the integrat
 
 ---
 
+## 0. One-Command Stack (Docker)
+
+The whole stack — GraphDB, this backend, and the [React explorer](https://github.com/r4stin/coupled-modelling-frontend) — can run with Docker instead of the manual setup below. Clone the frontend repo **as a sibling directory** of this one, then from this repo:
+
+```bash
+docker compose up --build
+```
+
+Open the explorer at `http://localhost:3000` (backend API: `http://localhost:5000`, GraphDB Workbench: `http://localhost:7200`). On first start the repository is created automatically (from `docker/graphdb-repo-config.ttl` — same defaults as the manual setup in §1) and seeded from `backend/onto.owl`; data persists in a named Docker volume (`docker compose down -v` resets it). Host ports are overridable via `GRAPHDB_PORT`, `BACKEND_PORT`, and `FRONTEND_PORT` (see the notes in `docker-compose.yml`). The Docker setup targets local use; the development workflows below (§5 demos, §6 test suite) use the manual setup.
+
+---
+
 ## 1. Database Setup
 1. Download and run [GraphDB](https://graphdb.ontotext.com/) locally (default URL is `http://localhost:7200`).
 2. Open the GraphDB Workbench in your browser, go to **Setup** -> **Repositories** -> **Create new repository**.
