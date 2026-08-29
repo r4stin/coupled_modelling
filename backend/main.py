@@ -2128,41 +2128,129 @@ def get_class_instance_summaries(class_name=None):
     }}
     """
     res = query_graphdb(query)
+    summaries = build_instance_summaries(res.get("results", {}).get("bindings", []))
+    summaries.sort(key=lambda x: x["label"])
+    return summaries
+
+
+def build_instance_summaries(bindings):
+    """
+    Aggregates SPARQL bindings of shape (?inst ?label ?lang ?type) into the shared
+    instance-summary dicts (id, label, types, property_preview, preview_truncated).
+    Preserves the first-appearance order of instances; callers sort as needed.
+    """
     inst_data = {}
-    for binding in res.get("results", {}).get("bindings", []):
-        inst_uri = binding["inst"]["value"]
-        inst_id = get_local_name(inst_uri)
-        type_uri = binding["type"]["value"]
-        type_name = get_local_name(type_uri)
-        
+    for binding in bindings:
+        inst_id = get_local_name(binding["inst"]["value"])
         if inst_id not in inst_data:
-            inst_data[inst_id] = {
-                "labels": [],
-                "types": set()
-            }
-        
-        inst_data[inst_id]["types"].add(type_name)
+            inst_data[inst_id] = {"labels": [], "types": set()}
+        inst_data[inst_id]["types"].add(get_local_name(binding["type"]["value"]))
         if "label" in binding:
             lang = binding.get("lang", {}).get("value", "")
-            val = binding["label"]["value"]
-            inst_data[inst_id]["labels"].append((lang, val))
-            
-    inst_candidates = collect_preview_candidates(list(inst_data.keys()))
+            inst_data[inst_id]["labels"].append((lang, binding["label"]["value"]))
 
+    inst_candidates = collect_preview_candidates(list(inst_data.keys()))
     summaries = []
     for inst_id, data in inst_data.items():
-        selected_label = select_preferred_label(data["labels"], inst_id)
         preview, truncated = summarize_preview(inst_candidates.get(inst_id, []))
-
         summaries.append({
             "id": inst_id,
-            "label": selected_label,
-            "types": sorted(list(data["types"])),
+            "label": select_preferred_label(data["labels"], inst_id),
+            "types": sorted(data["types"]),
             "property_preview": preview,
             "preview_truncated": truncated
         })
-    summaries.sort(key=lambda x: x["label"])
     return summaries
+
+
+SEARCH_RESULT_LIMIT = 20
+SEARCH_RESULT_LIMIT_MAX = 100
+SEARCH_TYPES = ("all", "class", "instance")
+
+
+def search_entities(text, entity_type="all", limit=SEARCH_RESULT_LIMIT):
+    """
+    Case-insensitive substring search over the local names and labels of project
+    classes and instances. Returns {"classes": [...], "instances": [...]} with each
+    group capped at `limit`; name-prefix matches rank before other matches.
+    Instances carry the same summary shape as get_class_instance_summaries.
+    """
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("Search text must not be empty")
+    if len(text) > 200:
+        raise ValueError("Search text must be at most 200 characters")
+    if entity_type not in SEARCH_TYPES:
+        raise ValueError(f"Invalid search type: {entity_type}. Expected one of {', '.join(SEARCH_TYPES)}")
+    limit = int(limit)
+    if not 1 <= limit <= SEARCH_RESULT_LIMIT_MAX:
+        raise ValueError(f"Search limit must be between 1 and {SEARCH_RESULT_LIMIT_MAX}")
+
+    term_text = text.lower()
+    term = serialize_literal(term_text)
+    namespace = get_uri('')
+    results = {"classes": [], "instances": []}
+
+    if entity_type in ("all", "class"):
+        query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX owl: <http://www.w3.org/2002/07/owl#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT DISTINCT ?name WHERE {{
+            GRAPH <{onto_uri}> {{
+                ?class rdf:type owl:Class .
+                FILTER (STRSTARTS(STR(?class), "{namespace}"))
+                BIND (STRAFTER(STR(?class), "#") AS ?name)
+                OPTIONAL {{ ?class rdfs:label ?anyLabel }}
+                FILTER (CONTAINS(LCASE(?name), {term}) || CONTAINS(LCASE(COALESCE(STR(?anyLabel), "")), {term}))
+            }}
+        }}
+        ORDER BY DESC(STRSTARTS(LCASE(?name), {term})) ?name
+        LIMIT {limit}
+        """
+        res = query_graphdb(query)
+        results["classes"] = [{"id": binding["name"]["value"]} for binding in res.get("results", {}).get("bindings", [])]
+
+    if entity_type in ("all", "instance"):
+        # The subquery anchors on a project-namespace type, not owl:NamedIndividual:
+        # SPARQL-created instances never receive the owl:NamedIndividual triple.
+        query = f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT ?inst ?label (LANG(?label) AS ?lang) ?type WHERE {{
+            {{
+                SELECT DISTINCT ?inst WHERE {{
+                    GRAPH <{onto_uri}> {{
+                        ?inst rdf:type ?anyType .
+                        FILTER (STRSTARTS(STR(?anyType), "{namespace}"))
+                        BIND (STRAFTER(STR(?inst), "#") AS ?name)
+                        OPTIONAL {{ ?inst rdfs:label ?anyLabel }}
+                        FILTER (CONTAINS(LCASE(?name), {term}) || CONTAINS(LCASE(COALESCE(STR(?anyLabel), "")), {term}))
+                    }}
+                }}
+                LIMIT {limit}
+            }}
+            GRAPH <{onto_uri}> {{
+                ?inst rdf:type ?type .
+                FILTER (STRSTARTS(STR(?type), "{namespace}"))
+                OPTIONAL {{ ?inst rdfs:label ?label }}
+            }}
+        }}
+        """
+        res = query_graphdb(query)
+        results["instances"] = build_instance_summaries(res.get("results", {}).get("bindings", []))
+        # Ranking happens here, not in SPARQL: a subquery's ORDER BY is not
+        # guaranteed to survive the outer join.
+        results["instances"].sort(
+            key=lambda summary: (
+                not (summary["id"].lower().startswith(term_text) or summary["label"].lower().startswith(term_text)),
+                summary["label"].lower(),
+            )
+        )
+
+    return results
 
 
 def get_instance_property_metadata(inst_name):

@@ -75,6 +75,24 @@ def api_get_class_instance_summaries():
     except Exception as e:
         return jsonify(error=str(e)), 500
 
+@app.route('/api/v1.0/search/', methods=['GET'])
+def api_search():
+    raw_limit = request.args.get('limit')
+    try:
+        limit = int(raw_limit) if raw_limit else SEARCH_RESULT_LIMIT
+    except ValueError:
+        return jsonify(error="limit must be an integer"), 400
+    try:
+        results = search_entities(request.args.get('q'), request.args.get('type', 'all'), limit)
+        return jsonify(results), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
 @app.route('/api/v1.0/get_class_metadata/', methods=['GET'])
 def api_get_class_metadata():
     class_name = request.args.get('class')

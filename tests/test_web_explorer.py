@@ -551,5 +551,129 @@ class TestWebExplorer(unittest.TestCase):
         self.assertEqual(r3["target_kind"], "class")
 
 
+class TestSearch(unittest.TestCase):
+    def setUp(self):
+        self.app = app.test_client()
+        self.app.testing = True
+
+    def test_search_route_requires_query_text(self):
+        """Verify a missing or blank q parameter returns 400."""
+        for url in ['/api/v1.0/search/', '/api/v1.0/search/?q=%20']:
+            response = self.app.get(url)
+            self.assertEqual(response.status_code, 400)
+
+    def test_search_route_rejects_non_integer_limit(self):
+        """Verify a non-numeric limit parameter returns 400."""
+        response = self.app.get('/api/v1.0/search/?q=x&limit=abc')
+        self.assertEqual(response.status_code, 400)
+
+    @patch('api.search_entities')
+    def test_search_route_passes_parameters(self, mock_search):
+        """Verify q, type, and limit reach search_entities as typed values."""
+        mock_search.return_value = {"classes": [], "instances": []}
+        response = self.app.get('/api/v1.0/search/?q=mok&type=instance&limit=5')
+        self.assertEqual(response.status_code, 200)
+        mock_search.assert_called_once_with('mok', 'instance', 5)
+
+    @patch('api.search_entities')
+    def test_search_route_defaults_empty_limit(self, mock_search):
+        """Verify an empty limit parameter falls back to the default instead of erroring."""
+        from main import SEARCH_RESULT_LIMIT
+        mock_search.return_value = {"classes": [], "instances": []}
+        response = self.app.get('/api/v1.0/search/?q=mok&limit=')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(mock_search.call_args[0][2], SEARCH_RESULT_LIMIT)
+
+    def test_search_rejects_invalid_type_and_limit(self):
+        """Verify out-of-contract type, limit, and text values raise ValueError."""
+        from main import search_entities
+        with self.assertRaises(ValueError):
+            search_entities('x', entity_type='bogus')
+        with self.assertRaises(ValueError):
+            search_entities('x', limit=0)
+        with self.assertRaises(ValueError):
+            search_entities('x', limit=101)
+        with self.assertRaises(ValueError):
+            search_entities('   ')
+        with self.assertRaises(ValueError):
+            search_entities('x' * 201)
+
+    @patch('main.query_graphdb')
+    def test_search_classes_only_runs_one_query(self, mock_query):
+        """Verify type=class skips the instance query and returns id-only class results."""
+        from main import search_entities
+        mock_query.return_value = {"results": {"bindings": [{"name": {"value": "coupled_system"}}]}}
+        out = search_entities('coup', entity_type='class')
+        self.assertEqual(out["classes"], [{"id": "coupled_system"}])
+        self.assertEqual(out["instances"], [])
+        self.assertEqual(mock_query.call_count, 1)
+
+    @patch('main.query_graphdb')
+    def test_search_class_query_matches_names_and_labels(self, mock_query):
+        """Verify the class query anchors instances on the project namespace and matches rdfs:label too."""
+        from main import search_entities
+        mock_query.return_value = {"results": {"bindings": []}}
+        search_entities('fluid', entity_type='class')
+        sent_query = mock_query.call_args[0][0]
+        self.assertIn('rdfs:label', sent_query)
+        self.assertNotIn('NamedIndividual', sent_query)
+
+    @patch('main.query_graphdb')
+    def test_search_escapes_quotes_in_term(self, mock_query):
+        """Verify quotes in the search text are escaped before SPARQL interpolation."""
+        from main import search_entities
+        mock_query.return_value = {"results": {"bindings": []}}
+        search_entities('a"b', entity_type='class')
+        sent_query = mock_query.call_args[0][0]
+        self.assertIn('a\\"b', sent_query)
+
+    @patch('main.collect_preview_candidates')
+    @patch('main.query_graphdb')
+    def test_search_instances_use_summary_shape(self, mock_query, mock_candidates):
+        """Verify instance results carry the get_class_instance_summaries shape."""
+        from main import search_entities
+        mock_candidates.return_value = {}
+        mock_query.return_value = {"results": {"bindings": [
+            {
+                "inst": {"value": "http://coupled_modelling.owl#instance_1"},
+                "type": {"value": "http://coupled_modelling.owl#coupled_system_1"},
+                "label": {"value": "FSI Mok"},
+                "lang": {"value": ""}
+            }
+        ]}}
+        out = search_entities('mok', entity_type='instance')
+        self.assertEqual(out["classes"], [])
+        self.assertEqual(len(out["instances"]), 1)
+        summary = out["instances"][0]
+        self.assertEqual(summary["id"], "instance_1")
+        self.assertEqual(summary["label"], "FSI Mok")
+        self.assertEqual(summary["types"], ["coupled_system_1"])
+        self.assertEqual(summary["property_preview"], [])
+        self.assertFalse(summary["preview_truncated"])
+
+    @patch('main.collect_preview_candidates')
+    @patch('main.query_graphdb')
+    def test_search_ranks_prefix_matches_first(self, mock_query, mock_candidates):
+        """Verify name/label prefix matches come before substring matches regardless of row order."""
+        from main import search_entities
+        mock_candidates.return_value = {}
+        mock_query.return_value = {"results": {"bindings": [
+            {
+                "inst": {"value": "http://coupled_modelling.owl#instance_1"},
+                "type": {"value": "http://coupled_modelling.owl#solvers"},
+                "label": {"value": "fsi_mok"},
+                "lang": {"value": ""}
+            },
+            {
+                "inst": {"value": "http://coupled_modelling.owl#instance_2"},
+                "type": {"value": "http://coupled_modelling.owl#solvers"},
+                "label": {"value": "mok_cfd"},
+                "lang": {"value": ""}
+            }
+        ]}}
+        out = search_entities('mok', entity_type='instance')
+        self.assertEqual([s["label"] for s in out["instances"]], ["mok_cfd", "fsi_mok"])
+
+
 if __name__ == '__main__':
     unittest.main()

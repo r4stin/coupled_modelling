@@ -109,6 +109,59 @@ paths:
         '500':
           $ref: '#/components/responses/UnexpectedError'
 
+  /search/:
+    get:
+      tags: [explorer]
+      operationId: searchEntities
+      summary: Search classes and instances by name or label
+      description: |
+        Case-insensitive substring search over the local names and labels of
+        project classes and instances. Each result group is capped at `limit`;
+        matches on a name prefix rank before other matches. Instance results
+        carry the same summary shape as `get_class_instance_summaries`.
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Search text (matched as a case-insensitive substring).
+          schema:
+            type: string
+          example: mok
+        - name: type
+          in: query
+          required: false
+          description: Restrict results to one entity kind.
+          schema:
+            type: string
+            enum: [all, class, instance]
+            default: all
+        - name: limit
+          in: query
+          required: false
+          description: Maximum results per group (1-100).
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Matching classes and instances.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResults'
+        '400':
+          description: Missing or empty `q`, unknown `type`, or `limit` out of range.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/GraphDBUnavailable'
+        '500':
+          $ref: '#/components/responses/UnexpectedError'
+
   /get_class_instance_summaries/:
     get:
       tags: [explorer]
@@ -1039,6 +1092,29 @@ components:
           type: string
           enum: [literal, object]
           description: Whether the value is a typed literal or the resolved label of a linked instance.
+
+    SearchResults:
+      type: object
+      required: [classes, instances]
+      properties:
+        classes:
+          type: array
+          description: Matching classes (empty when `type=instance`).
+          items:
+            $ref: '#/components/schemas/SearchClassResult'
+        instances:
+          type: array
+          description: Matching instances (empty when `type=class`).
+          items:
+            $ref: '#/components/schemas/InstanceSummary'
+
+    SearchClassResult:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+          description: Local class name.
 
     InstanceSummary:
       type: object
