@@ -7,6 +7,9 @@ import unittest
 import api
 from api import app
 
+# A real, GraphDB-independent GET route: CORS headers must appear on actual API responses.
+SPEC_ROUTE = '/api/v1.0/openapi.yaml'
+
 
 class TestCorsHeaders(unittest.TestCase):
     """CORS headers for the separate Next.js frontend (offline — no GraphDB needed)."""
@@ -16,7 +19,7 @@ class TestCorsHeaders(unittest.TestCase):
         self.allowed_origin = 'http://localhost:3000'
 
     def test_allowed_origin_gets_cors_headers(self):
-        res = self.client.get('/', headers={'Origin': self.allowed_origin})
+        res = self.client.get(SPEC_ROUTE, headers={'Origin': self.allowed_origin})
         self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), self.allowed_origin)
         self.assertIn('GET', res.headers.get('Access-Control-Allow-Methods', ''))
         self.assertIn('POST', res.headers.get('Access-Control-Allow-Methods', ''))
@@ -35,20 +38,20 @@ class TestCorsHeaders(unittest.TestCase):
         self.assertEqual(res.headers.get('Access-Control-Max-Age'), '86400')
 
     def test_disallowed_origin_gets_no_cors_headers(self):
-        res = self.client.get('/', headers={'Origin': 'http://evil.example.com'})
+        res = self.client.get(SPEC_ROUTE, headers={'Origin': 'http://evil.example.com'})
         self.assertIsNone(res.headers.get('Access-Control-Allow-Origin'))
 
     def test_no_origin_header_gets_no_cors_headers(self):
-        res = self.client.get('/')
+        res = self.client.get(SPEC_ROUTE)
         self.assertIsNone(res.headers.get('Access-Control-Allow-Origin'))
 
     def test_allowed_origins_configurable(self):
         original = api.CORS_ALLOWED_ORIGINS
         try:
             api.CORS_ALLOWED_ORIGINS = ['https://kb.example.org']
-            res = self.client.get('/', headers={'Origin': 'https://kb.example.org'})
+            res = self.client.get(SPEC_ROUTE, headers={'Origin': 'https://kb.example.org'})
             self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), 'https://kb.example.org')
-            res = self.client.get('/', headers={'Origin': self.allowed_origin})
+            res = self.client.get(SPEC_ROUTE, headers={'Origin': self.allowed_origin})
             self.assertIsNone(res.headers.get('Access-Control-Allow-Origin'))
         finally:
             api.CORS_ALLOWED_ORIGINS = original

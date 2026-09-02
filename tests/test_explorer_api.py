@@ -1,5 +1,7 @@
+"""Tests for the metadata, health, and search API endpoints consumed by the
+external web explorer (the separate coupled-modelling-frontend repository)."""
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import json
 import sys
 import os
@@ -18,21 +20,17 @@ from main import (
 )
 
 
-class TestWebExplorer(unittest.TestCase):
+class TestExplorerApi(unittest.TestCase):
     def setUp(self):
         self.app = app.test_client()
         self.app.testing = True
 
-    def test_root_index_route(self):
-        """Verify root / page returns 200 and includes primary visual panes."""
-        response = self.app.get('/')
-        self.assertEqual(response.status_code, 200)
-        
-        html_content = response.data.decode('utf-8')
-        self.assertIn('id="class-hierarchy"', html_content)
-        self.assertIn('id="instance-list"', html_content)
-        self.assertIn('id="instance-inspector"', html_content)
-        self.assertIn('id="health-badge"', html_content)
+    def test_root_route_removed(self):
+        """The API serves no UI: every registered route lives under /api/."""
+        rules = {rule.rule for rule in app.url_map.iter_rules()}
+        non_api = [rule for rule in rules if not rule.startswith('/api/')]
+        self.assertEqual(non_api, [])
+        self.assertEqual(self.app.get('/').status_code, 404)
 
     @patch('api.get_graphdb_health')
     def test_health_check_online(self, mock_health):

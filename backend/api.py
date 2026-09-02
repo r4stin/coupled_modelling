@@ -4,7 +4,8 @@ from flask import *
 from main import *
 
 
-app = Flask(__name__)
+# API-only service: the web explorer lives in the separate coupled-modelling-frontend repo.
+app = Flask(__name__, static_folder=None)
 
 # Cross-origin access for the separate Next.js frontend (coupled-modelling-frontend).
 # Comma-separated list of allowed origins; defaults to the local frontend dev server.
@@ -25,11 +26,6 @@ def add_cors_headers(response):
         response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
         response.headers['Access-Control-Max-Age'] = '86400'
     return response
-
-
-@app.route('/')
-def index():
-    return render_template('index.html')
 
 
 @app.route('/api/v1.0/openapi.yaml', methods=['GET'])
