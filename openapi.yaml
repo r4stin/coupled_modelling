@@ -540,11 +540,18 @@ paths:
     post:
       tags: [mutations]
       operationId: deleteInstance
-      summary: Delete an instance and all its triples (direct SPARQL)
+      summary: Delete an instance and, by default, its owned subtree (direct SPARQL)
       description: |
-        Cascading delete: removes every outgoing (`<inst> ?p ?o`) and incoming
-        (`?s ?p <inst>`) triple of the instance in one SPARQL update, so no
-        orphan references remain.
+        Removes every outgoing and incoming triple of the instance in one
+        transactional SPARQL update. With `cascade` (the default) the instance's
+        owned subtree goes with it: every individual reachable through `has_*`
+        links that is not reachable from outside the subtree. Coupled systems are
+        never owned by another instance, so traversal stops at them. Individuals
+        still reachable from elsewhere (an instance linked from outside and
+        everything below it, shared vocabulary terms for example) are kept and
+        reported in `kept`. With `cascade: false` only the instance itself is
+        removed and its children are left in place. Use
+        `get_instance_deletion_preview` to see the sets before deleting.
       requestBody:
         required: true
         content:
@@ -556,27 +563,64 @@ paths:
                 instance:
                   type: string
                   description: Identifier of the instance to delete.
+                cascade:
+                  type: boolean
+                  default: true
+                  description: Also delete the instance's owned subtree.
       responses:
         '200':
           description: The instance was deleted.
           content:
             application/json:
               schema:
-                type: object
-                required: [status, instance]
-                properties:
-                  status:
-                    type: string
-                    const: success
-                  instance:
-                    type: string
-                    description: Identifier of the deleted instance.
+                allOf:
+                  - $ref: '#/components/schemas/DeletionPreview'
+                  - type: object
+                    required: [status]
+                    properties:
+                      status:
+                        type: string
+                        const: success
         '400':
-          description: Missing `instance` parameter, or the instance does not exist.
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/GraphDBUnavailable'
+        '500':
+          $ref: '#/components/responses/UnexpectedError'
+
+  /get_instance_deletion_preview/:
+    get:
+      tags: [explorer]
+      operationId: getInstanceDeletionPreview
+      summary: Preview what a cascading deletion of an instance would remove
+      description: |
+        Read-only counterpart of `delete_instance`: the instances that would be
+        deleted (the requested one first), the reachable ones that would be kept,
+        and the surviving instances whose link would be removed.
+      parameters:
+        - name: instance
+          in: query
+          required: true
+          description: Local instance identifier.
+          schema:
+            type: string
+          example: instance_550e8400-e29b-41d4-a716-446655440000
+        - name: cascade
+          in: query
+          required: false
+          description: Preview the cascading (default) or the single-instance deletion.
+          schema:
+            type: boolean
+            default: true
+      responses:
+        '200':
+          description: The deletion preview.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/DeletionPreview'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '503':
           $ref: '#/components/responses/GraphDBUnavailable'
         '500':
@@ -998,6 +1042,29 @@ components:
         error:
           type: string
           description: Human-readable error message.
+
+    DeletionPreview:
+      type: object
+      required: [instance, deleted, kept, unlinked_from]
+      properties:
+        instance:
+          type: string
+          description: Identifier of the instance the deletion applies to.
+        deleted:
+          type: array
+          description: Identifiers the deletion removes, the requested instance first.
+          items:
+            type: string
+        kept:
+          type: array
+          description: Reachable instances kept because they are still reachable from outside the subtree (an instance linked from elsewhere, or a coupled system, plus everything below it).
+          items:
+            type: string
+        unlinked_from:
+          type: array
+          description: Surviving instances whose link to the deleted instance is removed.
+          items:
+            type: string
 
     HealthOk:
       type: object

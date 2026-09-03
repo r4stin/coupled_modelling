@@ -95,7 +95,7 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 ---
 
 ## 7. Architecture: Hybrid Owlready2 + GraphDB
-* **Direct SPARQL mutations:** Simple value insertions, deletions, replacements, instance creation (UUID-based), and full instance deletion run directly in GraphDB via transactional SPARQL Update requests.
+* **Direct SPARQL mutations:** Simple value insertions, deletions, replacements, instance creation (UUID-based), and instance deletion (cascading over the instance's owned subtree, keeping anything still linked from elsewhere) run directly in GraphDB via transactional SPARQL Update requests.
 * **In-memory Owlready2 workflows:** Copy operations, complex ontology construction, KRATOS JSON import/export, and structural inference continue to use Owlready2 and synchronize with GraphDB.
 
 ---

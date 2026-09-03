@@ -440,13 +440,34 @@ def api_create_class_instance():
 def api_delete_instance():
     args = request.get_json() or {}
     instance_name = args.get('instance')
-    
+    cascade = args.get('cascade', True)
+
     if not instance_name:
         return jsonify(error="instance parameter is required"), 400
-        
+    if not isinstance(cascade, bool):
+        return jsonify(error="cascade parameter must be a boolean"), 400
+
     try:
-        delete_instance_sparql(instance_name)
-        return jsonify(status="success", instance=instance_name), 200
+        result = delete_instance_sparql(instance_name, cascade=cascade)
+        return jsonify(status="success", **result), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route('/api/v1.0/get_instance_deletion_preview/', methods=['GET'])
+def api_get_instance_deletion_preview():
+    instance_name = request.args.get('instance')
+    cascade = request.args.get('cascade', 'true').lower()
+    if not instance_name:
+        return jsonify(error="Missing required query parameter: instance"), 400
+    if cascade not in ('true', 'false'):
+        return jsonify(error="cascade parameter must be true or false"), 400
+    try:
+        return jsonify(get_instance_deletion_preview(instance_name, cascade=(cascade == 'true'))), 200
     except GraphDBError as e:
         return jsonify(error=str(e)), 503
     except ValueError as e:

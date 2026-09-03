@@ -1480,37 +1480,142 @@ def create_class_instance_sparql(class_name, label):
     return new_name
 
 
-def delete_instance_sparql(instance_name):
-    """
-    Deletes an instance completely from GraphDB by removing all outgoing and incoming triples.
+RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
 
-    Args:
-        instance_name (str): The local name or IRI of the instance.
+
+def is_individual(name):
+    """True when `name` is typed by a project class (classes and properties carry rdf:type too)."""
+    return bool(collect_instance_types([name]).get(name))
+
+
+def _instance_links(iris, bound):
+    """
+    Yields (subject, object, is_coupled_system) for the `has_*` links between
+    individuals touching the given IRIs, with VALUES bound on the subject ('s') or
+    the object ('o'). The flag marks objects that are coupled systems: roots of their
+    own, never owned by another instance.
+    """
+    ns = get_uri('')
+    for batch in chunked(iris):
+        values = " ".join(f"<{iri}>" for iri in batch)
+        query = f"""
+        SELECT DISTINCT ?s ?o (BOUND(?cs) AS ?coupled) WHERE {{
+            GRAPH <{onto_uri}> {{
+                VALUES ?{bound} {{ {values} }}
+                ?s ?p ?o .
+                FILTER(isIRI(?o) && STRSTARTS(STR(?p), "{ns}has_"))
+                ?s {RDF_TYPE} ?st . FILTER(STRSTARTS(STR(?st), "{ns}"))
+                ?o {RDF_TYPE} ?ot . FILTER(STRSTARTS(STR(?ot), "{ns}"))
+                OPTIONAL {{ ?o {RDF_TYPE} ?cs . ?cs <http://www.w3.org/2000/01/rdf-schema#subClassOf>* {serialize_iri('coupled_system')} . }}
+            }}
+        }}
+        """
+        for binding in query_graphdb(query).get("results", {}).get("bindings", []):
+            yield binding["s"]["value"], binding["o"]["value"], binding["coupled"]["value"] == "true"
+
+
+def partition_subtree(root, children, incoming, boundaries=()):
+    """
+    Pure split of the nodes reachable from `root` (`children`: node -> linked nodes,
+    one entry per reachable node) given the `incoming` (subject, object) links into
+    them and the `boundaries` (reachable nodes that are never owned, e.g. coupled
+    systems). Returns (owned, kept, unlinked_from): `owned` goes with the root; `kept`
+    holds every node still reachable from outside the subtree, i.e. a boundary or a
+    node linked from elsewhere, plus everything below it, never passing through the
+    root; `unlinked_from` are the surviving nodes whose link to the root is removed.
+    """
+    reachable = set(children)
+    incoming = list(incoming)
+    anchors = set(boundaries) - {root}
+    # A link from outside the subtree, or from a boundary (whose branch is not ours), protects its target.
+    anchors.update(obj for subject, obj in incoming if (subject not in reachable or subject in anchors) and obj != root)
+    kept = set()
+    stack = list(anchors)
+    while stack:
+        node = stack.pop()
+        if node in kept or node == root:
+            continue
+        kept.add(node)
+        stack.extend(children[node])
+    owned = [root] + sorted(reachable - kept - {root})
+    owned_set = set(owned)
+    unlinked_from = {subject for subject, obj in incoming if obj == root and subject not in owned_set}
+    return owned, sorted(kept), sorted(unlinked_from)
+
+
+def collect_deletion_sets(root, cascade=True):
+    """The owned/kept/unlinked_from split for deleting the individual IRI `root`."""
+    children = {root: set()}
+    boundaries = set()
+    frontier = [root] if cascade else []
+    while frontier:
+        discovered = []
+        for parent, child, is_coupled_system in _instance_links(frontier, 's'):
+            children[parent].add(child)
+            if child in children:
+                continue
+            children[child] = set()
+            if is_coupled_system:
+                boundaries.add(child)
+            else:
+                discovered.append(child)
+        frontier = discovered
+    incoming = ((subject, obj) for subject, obj, _ in _instance_links(list(children), 'o'))
+    return partition_subtree(root, children, incoming, boundaries)
+
+
+def get_instance_deletion_preview(instance_name, cascade=True):
+    """Read-only counterpart of a deletion."""
+    return delete_instance_sparql(instance_name, cascade=cascade, dry_run=True)
+
+
+def delete_instance_sparql(instance_name, cascade=True, dry_run=False):
+    """
+    Deletes an individual with every outgoing and incoming triple. With `cascade`
+    (the default) its owned subtree goes with it; with `dry_run` nothing is deleted.
+
+    Returns:
+        dict with `instance`, the `deleted` local names (the instance first), the
+        `kept` ones still reachable from outside the subtree, and `unlinked_from`:
+        surviving instances whose link to the deleted instance is removed.
     """
     if not instance_name:
         raise ValueError("instance_name parameter is required.")
-        
-    if not instance_exists(instance_name):
+    validate_local_name(instance_name)
+    if not is_individual(instance_name):
         raise ValueError(f"Instance {instance_name} does not exist in GraphDB.")
-        
-    inst_iri = serialize_subject(instance_name)
-    query = f"""
-    DELETE {{
-        GRAPH <{onto_uri}> {{
-            {inst_iri} ?p ?o .
-            ?s ?p2 {inst_iri} .
+    root = f"{get_uri('')}{instance_name}"
+
+    owned, kept, referrers = collect_deletion_sets(root, cascade)
+    result = {
+        "instance": instance_name,
+        "deleted": [get_local_name(iri) for iri in owned],
+        "kept": [get_local_name(iri) for iri in kept],
+        "unlinked_from": [get_local_name(iri) for iri in referrers],
+    }
+    if dry_run:
+        return result
+
+    # One request, several operations: bounded VALUES blocks, still one transaction.
+    operations = []
+    for batch in chunked(owned):
+        values = " ".join(f"<{iri}>" for iri in batch)
+        operations.append(f"""
+        DELETE {{
+            GRAPH <{onto_uri}> {{
+                ?x ?p ?o .
+                ?s ?q ?x .
+            }}
         }}
-    }}
-    WHERE {{
-        GRAPH <{onto_uri}> {{
-            {{ {inst_iri} ?p ?o . }}
-            UNION
-            {{ ?s ?p2 {inst_iri} . }}
+        WHERE {{
+            GRAPH <{onto_uri}> {{
+                VALUES ?x {{ {values} }}
+                {{ ?x ?p ?o . }} UNION {{ ?s ?q ?x . }}
+            }}
         }}
-    }}
-    """
-    sparql_update(query)
-    return True
+        """)
+    sparql_update(";\n".join(operations))
+    return result
 
 
 

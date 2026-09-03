@@ -34,6 +34,7 @@ jobs:
             tests/test_serialization.py \
             tests/test_explorer_api.py \
             tests/test_web_mutations.py \
+            tests/test_deletion_sets.py \
             tests/test_openapi_spec.py \
             -v
 

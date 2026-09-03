@@ -331,6 +331,119 @@ class TestWebMutations(unittest.TestCase):
         self.assertEqual(delete_res.get_json().get("instance"), inst_id)
         self.assertFalse(main.instance_exists(inst_id))
 
+    def _seed_subtree(self):
+        """
+        root -> child -> grandchild; child -> shared term (also linked by an outsider,
+        with its own descendant and a link back to the root) and an exclusive term;
+        child also links a class IRI and another coupled system; an outsider links the root.
+        """
+        keys = ('root', 'child', 'grandchild', 'shared', 'sharedchild', 'exclusive', 'outsider', 'othersystem')
+        names = {key: f"{self.test_prefix}{key}_{uuid_mod.uuid4().hex[:6]}" for key in keys}
+        iri = {key: main.serialize_iri(name) for key, name in names.items()}
+        main.sparql_update(f"""
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        INSERT DATA {{
+            GRAPH <{self.onto_uri}> {{
+                {iri['root']} rdf:type {main.serialize_iri('coupled_system')} .
+                {iri['root']} {main.serialize_iri('has_solver_settings')} {iri['child']} .
+                {iri['child']} rdf:type {main.serialize_iri('solver_settings')} .
+                {iri['child']} {main.serialize_iri('has_solvers')} {iri['grandchild']} .
+                {iri['child']} {main.serialize_iri('has_type')} {iri['shared']} .
+                {iri['child']} {main.serialize_iri('has_name')} {iri['exclusive']} .
+                {iri['child']} {main.serialize_iri('has_type')} {main.serialize_iri('solver_settings')} .
+                {iri['child']} {main.serialize_iri('has_connect_to')} {iri['othersystem']} .
+                {iri['grandchild']} rdf:type {main.serialize_iri('solvers')} .
+                {iri['shared']} rdf:type {main.serialize_iri('type')} .
+                {iri['shared']} rdfs:label "shared_term"^^xsd:string .
+                {iri['shared']} {main.serialize_iri('has_data')} {iri['sharedchild']} .
+                {iri['shared']} {main.serialize_iri('has_connect_to')} {iri['root']} .
+                {iri['sharedchild']} rdf:type {main.serialize_iri('data')} .
+                {iri['exclusive']} rdf:type {main.serialize_iri('name')} .
+                {iri['exclusive']} rdfs:label "exclusive_term"^^xsd:string .
+                {iri['outsider']} rdf:type {main.serialize_iri('solver_settings')} .
+                {iri['outsider']} {main.serialize_iri('has_type')} {iri['shared']} .
+                {iri['outsider']} {main.serialize_iri('has_connect_to')} {iri['root']} .
+                {iri['othersystem']} rdf:type {main.serialize_iri('coupled_system')} .
+            }}
+        }}
+        """)
+        return names
+
+    def _link_exists(self, subject, prop, obj):
+        ask = f"ASK {{ GRAPH <{self.onto_uri}> {{ {main.serialize_iri(subject)} {main.serialize_iri(prop)} {main.serialize_iri(obj)} . }} }}"
+        return main.query_graphdb(ask)["boolean"]
+
+    def _assert_cascade_sets(self, body, names):
+        self.assertEqual(body["instance"], names['root'])
+        self.assertEqual(body["deleted"][0], names['root'])
+        self.assertEqual(set(body["deleted"]), {names['root'], names['child'], names['grandchild'], names['exclusive']})
+        # Kept: the shared term with its descendant, and the other coupled system (a boundary).
+        self.assertEqual(set(body["kept"]), {names['shared'], names['sharedchild'], names['othersystem']})
+        # Both links into the root go: from the outsider and from the kept shared term.
+        self.assertEqual(set(body["unlinked_from"]), {names['outsider'], names['shared']})
+
+    def test_delete_instance_cascades_over_the_owned_subtree(self):
+        names = self._seed_subtree()
+        res = self.app.post('/api/v1.0/delete_instance/', json={"instance": names['root']})
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(body["status"], "success")
+        self._assert_cascade_sets(body, names)
+        for key in ('root', 'child', 'grandchild', 'exclusive'):
+            self.assertFalse(main.instance_exists(names[key]), key)
+        for key in ('shared', 'sharedchild', 'outsider', 'othersystem'):
+            self.assertTrue(main.instance_exists(names[key]), key)
+        self.assertTrue(self._link_exists(names['outsider'], 'has_type', names['shared']))
+        self.assertFalse(self._link_exists(names['outsider'], 'has_connect_to', names['root']))
+        # The class IRI linked from the deleted child is untouched.
+        class_ask = f"ASK {{ GRAPH <{self.onto_uri}> {{ {main.serialize_iri('solver_settings')} rdf:type <http://www.w3.org/2002/07/owl#Class> . }} }}"
+        self.assertTrue(main.query_graphdb("PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n" + class_ask)["boolean"])
+
+    def test_delete_instance_without_cascade_keeps_children(self):
+        names = self._seed_subtree()
+        res = self.app.post('/api/v1.0/delete_instance/', json={"instance": names['root'], "cascade": False})
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(body["deleted"], [names['root']])
+        self.assertEqual(body["kept"], [])
+        self.assertEqual(set(body["unlinked_from"]), {names['outsider'], names['shared']})
+        self.assertFalse(main.instance_exists(names['root']))
+        self.assertTrue(main.instance_exists(names['child']))
+
+    def test_delete_instance_rejects_non_boolean_cascade(self):
+        res = self.app.post('/api/v1.0/delete_instance/', json={"instance": self.test_inst, "cascade": "yes"})
+        self.assertEqual(res.status_code, 400)
+        self.assertTrue(main.instance_exists(self.test_inst))
+
+    def test_delete_instance_rejects_classes(self):
+        res = self.app.post('/api/v1.0/delete_instance/', json={"instance": "solver_settings"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(self.app.get('/api/v1.0/get_instance_deletion_preview/?instance=solver_settings').status_code, 400)
+
+    def test_deletion_preview_matches_the_cascade_without_deleting(self):
+        names = self._seed_subtree()
+        res = self.app.get(f"/api/v1.0/get_instance_deletion_preview/?instance={names['root']}")
+        self.assertEqual(res.status_code, 200)
+        self._assert_cascade_sets(res.get_json(), names)
+        self.assertTrue(main.instance_exists(names['root']))
+
+    def test_deletion_preview_without_cascade(self):
+        names = self._seed_subtree()
+        res = self.app.get(f"/api/v1.0/get_instance_deletion_preview/?instance={names['root']}&cascade=false")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(body["deleted"], [names['root']])
+        self.assertEqual(body["kept"], [])
+        self.assertEqual(set(body["unlinked_from"]), {names['outsider'], names['shared']})
+        self.assertEqual(self.app.get(f"/api/v1.0/get_instance_deletion_preview/?instance={names['root']}&cascade=maybe").status_code, 400)
+
+    def test_deletion_preview_errors(self):
+        self.assertEqual(self.app.get('/api/v1.0/get_instance_deletion_preview/').status_code, 400)
+        missing = self.app.get('/api/v1.0/get_instance_deletion_preview/?instance=instance_missing_zz')
+        self.assertEqual(missing.status_code, 400)
+
     def test_instance_metadata_describes_linked_objects(self):
         # Re-assert the link: sibling tests in this class delete the fixture's
         # connect_to triple, and test order must not matter.
