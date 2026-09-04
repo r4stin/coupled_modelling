@@ -267,7 +267,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/InstanceMetadata'
         '400':
-          description: Missing `instance` parameter, or the instance does not exist.
+          description: Missing `instance` parameter, or the identifier is not an existing individual (classes and properties do not count).
           content:
             application/json:
               schema:
@@ -431,7 +431,8 @@ paths:
         Replaces one stored value with another in a single SPARQL update. The old value
         is matched by value equality (dangling references allowed); the new value keeps
         its exact datatype and language tag. When the old value no longer exists, the
-        update is a no-op.
+        update is a no-op. Replacing an object value removes the old link only; the
+        previous target is not garbage-collected.
       requestBody:
         required: true
         content:
@@ -471,6 +472,14 @@ paths:
       tags: [mutations]
       operationId: deleteValue
       summary: Delete a single property value (direct SPARQL)
+      description: |
+        Removes the triple. When the value is an object link and `cascade` is set
+        (the default), the linked instance's owned subtree is deleted as well if
+        nothing else reaches it afterwards: the same ownership rule as
+        `delete_instance`. A coupled system, a target still linked from elsewhere,
+        a link that is not stored, and the instance holding the link are never
+        collected. The removal and the collection run in one transactional
+        update. Use `get_value_deletion_preview` to see the outcome first.
       requestBody:
         required: true
         content:
@@ -494,9 +503,68 @@ paths:
                     - $ref: '#/components/schemas/ObjectValueTarget'
                     - $ref: '#/components/schemas/LiteralValueTarget'
                     - $ref: '#/components/schemas/ScalarValue'
+                cascade:
+                  type: boolean
+                  default: true
+                  description: Also delete the unlinked instance's owned subtree when nothing else reaches it.
       responses:
-        '201':
-          $ref: '#/components/responses/EmptyCreated'
+        '200':
+          description: The value was deleted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/UnlinkResult'
+                  - type: object
+                    required: [status]
+                    properties:
+                      status:
+                        type: string
+                        const: success
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '503':
+          $ref: '#/components/responses/GraphDBUnavailable'
+        '500':
+          $ref: '#/components/responses/UnexpectedError'
+
+  /get_value_deletion_preview/:
+    get:
+      tags: [explorer]
+      operationId: getValueDeletionPreview
+      summary: Preview what removing an object link would delete
+      description: |
+        Read-only counterpart of `delete_value` for an object link: whether the
+        linked instance would be deleted with its owned subtree (nothing else
+        reaches it afterwards) or kept.
+      parameters:
+        - name: instance
+          in: query
+          required: true
+          description: Identifier of the instance holding the link.
+          schema:
+            type: string
+          example: instance_550e8400-e29b-41d4-a716-446655440000
+        - name: property
+          in: query
+          required: true
+          description: Property name (without the `has_` prefix).
+          schema:
+            type: string
+          example: solver_settings
+        - name: target
+          in: query
+          required: true
+          description: Identifier of the linked instance.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The unlink preview.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnlinkResult'
         '400':
           $ref: '#/components/responses/BadRequest'
         '503':
@@ -509,6 +577,7 @@ paths:
       tags: [mutations]
       operationId: deleteValues
       summary: Delete all values of the given properties (direct SPARQL)
+      description: Removes the triples only; unlinked instances are not garbage-collected.
       requestBody:
         required: true
         content:
@@ -1043,28 +1112,53 @@ components:
           type: string
           description: Human-readable error message.
 
-    DeletionPreview:
+    DeletionSets:
       type: object
-      required: [instance, deleted, kept, unlinked_from]
+      description: What a deletion removes and what it leaves in place.
+      required: [deleted, kept]
       properties:
-        instance:
-          type: string
-          description: Identifier of the instance the deletion applies to.
         deleted:
           type: array
-          description: Identifiers the deletion removes, the requested instance first.
+          description: Identifiers the deletion removes, the root of the collected subtree first; empty when nothing is collected.
           items:
             type: string
         kept:
           type: array
-          description: Reachable instances kept because they are still reachable from outside the subtree (an instance linked from elsewhere, or a coupled system, plus everything below it).
+          description: Reachable instances kept because they are still reachable from outside the collected subtree (an instance linked from elsewhere, or a coupled system, plus everything below it).
           items:
             type: string
-        unlinked_from:
-          type: array
-          description: Surviving instances whose link to the deleted instance is removed.
-          items:
-            type: string
+
+    DeletionPreview:
+      allOf:
+        - $ref: '#/components/schemas/DeletionSets'
+        - type: object
+          required: [instance, unlinked_from]
+          properties:
+            instance:
+              type: string
+              description: Identifier of the instance the deletion applies to.
+            unlinked_from:
+              type: array
+              description: Surviving instances whose link to the deleted instance is removed.
+              items:
+                type: string
+
+    UnlinkResult:
+      allOf:
+        - $ref: '#/components/schemas/DeletionSets'
+        - type: object
+          required: [target]
+          properties:
+            target:
+              type: [string, 'null']
+              description: >
+                The unlinked instance, or null when the value was a literal. It appears in
+                `deleted` when collected, in `kept` when it survives (still linked from
+                elsewhere, a coupled system, the link holder itself, `cascade` off, or the
+                link was not stored), and in neither when it is not an individual (a
+                dangling reference or a class). The instance holding the link is never
+                collected; it is listed in `kept` when the target is collected and a link
+                below the target leads back to it.
 
     HealthOk:
       type: object

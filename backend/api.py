@@ -397,17 +397,37 @@ def api_replace_value():
 
 @app.route('/api/v1.0/delete_value/', methods=['POST'])
 def api_delete_value():
-    args = request.get_json()
+    args = request.get_json() or {}
     inst = args.get('instance')
     prop = args.get('property')
     value_obj = args.get('value')
-    
+    cascade = args.get('cascade', True)
+
     if not inst or not prop or value_obj is None:
         return jsonify(error="instance, property, and value parameters are required"), 400
-        
+    if not isinstance(cascade, bool):
+        return jsonify(error="cascade parameter must be a boolean"), 400
+
     try:
-        delete_value_sparql(inst, prop, value_obj)
-        return jsonify(''), 201
+        result = delete_value_sparql(inst, prop, value_obj, cascade=cascade)
+        return jsonify(status="success", **result), 200
+    except GraphDBError as e:
+        return jsonify(error=str(e)), 503
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route('/api/v1.0/get_value_deletion_preview/', methods=['GET'])
+def api_get_value_deletion_preview():
+    inst = request.args.get('instance')
+    prop = request.args.get('property')
+    target = request.args.get('target')
+    if not inst or not prop or not target:
+        return jsonify(error="Missing required query parameters: instance, property, target"), 400
+    try:
+        return jsonify(get_value_deletion_preview(inst, prop, target)), 200
     except GraphDBError as e:
         return jsonify(error=str(e)), 503
     except ValueError as e:

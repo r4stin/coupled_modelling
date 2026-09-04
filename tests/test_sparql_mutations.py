@@ -108,6 +108,13 @@ class TestSparqlMutations(unittest.TestCase):
         with self.assertRaises(ValueError):
             main.replace_properties_sparql("instance_non_existent_subject_999", {"echo_level": 4})
 
+        # Classes and properties carry rdf:type in the same graph but are neither subjects nor link targets.
+        with self.assertRaises(ValueError):
+            main.add_value_sparql("coupled_system", "echo_level", 4)
+        with self.assertRaises(ValueError) as ctx:
+            main.replace_value_sparql(self.test_subj, "solver", {"kind": "object", "id": self.test_obj}, {"kind": "object", "id": "has_name"})
+        self.assertIn("does not exist in GraphDB", str(ctx.exception))
+
     def test_add_value_literal(self):
         with patch('main.reload_ontology_from_graphdb') as mock_reload, \
              patch('main.push_to_graphdb') as mock_push:

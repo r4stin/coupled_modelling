@@ -36,6 +36,9 @@ def get_db_path():
     return path
 
 
+RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
+
+
 def get_uri(name):
     if name.startswith('http'):
         return name
@@ -95,6 +98,11 @@ def serialize_iri(local_name):
     """Validates and wraps a local name as a full IRI."""
     validate_local_name(local_name)
     return f"<http://coupled_modelling.owl#{local_name}>"
+
+
+def term_iri(term):
+    """The IRI inside a serialized `<term>`."""
+    return term[1:-1]
 
 
 def serialize_literal(value):
@@ -817,30 +825,25 @@ def get_property_iri(prop_name):
     return serialize_iri(f"has_{prop_name}")
 
 
-def instance_exists(name):
-    instance_iri = serialize_iri(name)
+def is_individual_term(term):
+    """True when the serialized IRI term is typed by a project class; classes and properties carry rdf:type too and never count."""
     query = f"""
     ASK {{
-        GRAPH <http://coupled_modelling.owl> {{
-            {instance_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type .
+        GRAPH <{onto_uri}> {{
+            {term} {RDF_TYPE} ?type .
+            FILTER(STRSTARTS(STR(?type), "{get_uri('')}"))
         }}
     }}
     """
-    res = query_graphdb(query)
-    return res.get("boolean", False)
+    return query_graphdb(query).get("boolean", False)
+
+
+def instance_exists(name):
+    return is_individual_term(serialize_iri(name))
 
 
 def validate_subject_exists(subj):
-    subj_iri = serialize_subject(subj)
-    query = f"""
-    ASK {{
-        GRAPH <http://coupled_modelling.owl> {{
-            {subj_iri} <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?type .
-        }}
-    }}
-    """
-    res = query_graphdb(query)
-    if not res.get("boolean", False):
+    if not is_individual_term(serialize_subject(subj)):
         raise ValueError(f"Subject instance {subj} does not exist in GraphDB.")
 
 
@@ -1092,58 +1095,61 @@ def add_value_sparql(subj, prop_name, value=None):
     return resolved_values if isinstance(value, list) else resolved_values[0]
 
 
-def delete_value_sparql(subj, prop_name, value=None):
-    """Deletes a specific triple or all triples for a property on a subject."""
+def link_target(value):
+    """The instance id an object-link value points at; None for literals and delete-all."""
+    if isinstance(value, dict):
+        return value.get("id") if value.get("kind") == "object" else None
+    if isinstance(value, str) and value.startswith("instance"):
+        return value
+    return None
+
+
+def delete_value_sparql(subj, prop_name, value=None, cascade=True):
+    """Deletes one value (all when None); with `cascade` an unlinked instance goes with its owned subtree when nothing else reaches it. Returns {target, deleted, kept}."""
     validate_subject_exists(subj)
     subj_iri = serialize_subject(subj)
     pred_iri = get_property_iri(prop_name)
-    
-    if value is not None:
-        if isinstance(value, dict) and ("kind" in value or "value" in value or "id" in value):
-            # Deletions must also match dangling references and non-canonical lexical
-            # forms ("1.50"^^xsd:double vs "1.5"), so: no existence check, and matching
-            # by SPARQL value equality instead of exact-term DELETE DATA.
-            obj_term = serialize_metadata_value(value, require_existing=False)
-            query = f"""
-            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-            DELETE {{
-                GRAPH <http://coupled_modelling.owl> {{
-                    {subj_iri} {pred_iri} ?old_val .
-                }}
-            }}
-            WHERE {{
-                GRAPH <http://coupled_modelling.owl> {{
-                    {subj_iri} {pred_iri} ?old_val .
-                    FILTER(?old_val = {obj_term})
-                }}
-            }}
-            """
-            sparql_update(query)
-        else:
-            values = value if isinstance(value, list) else [value]
-            triples = []
-            for val in values:
-                obj_val = serialize_object(val)
-                triples.append(f"{subj_iri} {pred_iri} {obj_val} .")
-            if triples:
-                query = f"""
-                PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-                DELETE DATA {{
-                    GRAPH <http://coupled_modelling.owl> {{
-                        {" ".join(triples)}
-                    }}
-                }}
-                """
-                sparql_update(query)
-    else:
+
+    if value is None:
         query = f"""
         DELETE WHERE {{
-            GRAPH <http://coupled_modelling.owl> {{
+            GRAPH <{onto_uri}> {{
                 {subj_iri} {pred_iri} ?old_val .
             }}
         }}
         """
-        sparql_update(query)
+    elif isinstance(value, dict) and ("kind" in value or "value" in value or "id" in value):
+        # Deletions must also match dangling references and non-canonical lexical
+        # forms ("1.50"^^xsd:double vs "1.5"), so: no existence check, and matching
+        # by SPARQL value equality instead of exact-term DELETE DATA.
+        obj_term = serialize_metadata_value(value, require_existing=False)
+        query = f"""
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        DELETE {{
+            GRAPH <{onto_uri}> {{
+                {subj_iri} {pred_iri} ?old_val .
+            }}
+        }}
+        WHERE {{
+            GRAPH <{onto_uri}> {{
+                {subj_iri} {pred_iri} ?old_val .
+                FILTER(?old_val = {obj_term})
+            }}
+        }}
+        """
+    else:
+        query = f"""
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        DELETE DATA {{
+            GRAPH <{onto_uri}> {{
+                {subj_iri} {pred_iri} {serialize_object(value)} .
+            }}
+        }}
+        """
+
+    result, owned = unlink_sets(subj, prop_name, link_target(value), cascade)
+    sparql_update(";\n".join([query, *delete_individuals_operations(owned)]))
+    return result
 
 
 
@@ -1480,26 +1486,13 @@ def create_class_instance_sparql(class_name, label):
     return new_name
 
 
-RDF_TYPE = "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
-
-
-def is_individual(name):
-    """True when `name` is typed by a project class (classes and properties carry rdf:type too)."""
-    return bool(collect_instance_types([name]).get(name))
-
-
 def _instance_links(iris, bound):
-    """
-    Yields (subject, object, is_coupled_system) for the `has_*` links between
-    individuals touching the given IRIs, with VALUES bound on the subject ('s') or
-    the object ('o'). The flag marks objects that are coupled systems: roots of their
-    own, never owned by another instance.
-    """
+    """Yields (subject, predicate, object, is_coupled_system) for the `has_*` links between individuals touching the IRIs, VALUES bound on 's' or 'o'."""
     ns = get_uri('')
     for batch in chunked(iris):
         values = " ".join(f"<{iri}>" for iri in batch)
         query = f"""
-        SELECT DISTINCT ?s ?o (BOUND(?cs) AS ?coupled) WHERE {{
+        SELECT DISTINCT ?s ?p ?o (BOUND(?cs) AS ?coupled) WHERE {{
             GRAPH <{onto_uri}> {{
                 VALUES ?{bound} {{ {values} }}
                 ?s ?p ?o .
@@ -1511,7 +1504,27 @@ def _instance_links(iris, bound):
         }}
         """
         for binding in query_graphdb(query).get("results", {}).get("bindings", []):
-            yield binding["s"]["value"], binding["o"]["value"], binding["coupled"]["value"] == "true"
+            yield binding["s"]["value"], binding["p"]["value"], binding["o"]["value"], binding["coupled"]["value"] == "true"
+
+
+def _reachable_children(root):
+    """The `has_*` closure below `root` as (children, boundaries); coupled systems are boundaries and never expanded."""
+    children = {root: set()}
+    boundaries = set()
+    frontier = [root]
+    while frontier:
+        discovered = []
+        for parent, _, child, is_coupled_system in _instance_links(frontier, 's'):
+            children[parent].add(child)
+            if child in children:
+                continue
+            children[child] = set()
+            if is_coupled_system:
+                boundaries.add(child)
+            else:
+                discovered.append(child)
+        frontier = discovered
+    return children, boundaries
 
 
 def partition_subtree(root, children, incoming, boundaries=()):
@@ -1543,62 +1556,55 @@ def partition_subtree(root, children, incoming, boundaries=()):
     return owned, sorted(kept), sorted(unlinked_from)
 
 
+def partition_unlinked(holder, target, children, incoming, boundaries=()):
+    """Pure split for removing the link `holder` -> `target` (`incoming` excludes it); the holder is an anchor. Returns (owned, kept), a surviving target in `kept` alone."""
+    if target == holder or target in boundaries:
+        return [], [target]
+    anchors = set(boundaries) | ({holder} if holder in children else set())
+    owned, kept, referrers = partition_subtree(target, children, incoming, anchors)
+    # A surviving referrer means an outside path still reaches the target.
+    return ([], [target]) if referrers else (owned, kept)
+
+
 def collect_deletion_sets(root, cascade=True):
     """The owned/kept/unlinked_from split for deleting the individual IRI `root`."""
-    children = {root: set()}
-    boundaries = set()
-    frontier = [root] if cascade else []
-    while frontier:
-        discovered = []
-        for parent, child, is_coupled_system in _instance_links(frontier, 's'):
-            children[parent].add(child)
-            if child in children:
-                continue
-            children[child] = set()
-            if is_coupled_system:
-                boundaries.add(child)
-            else:
-                discovered.append(child)
-        frontier = discovered
-    incoming = ((subject, obj) for subject, obj, _ in _instance_links(list(children), 'o'))
+    children, boundaries = _reachable_children(root) if cascade else ({root: set()}, set())
+    incoming = ((subject, obj) for subject, _, obj, _ in _instance_links(list(children), 'o'))
     return partition_subtree(root, children, incoming, boundaries)
 
 
-def get_instance_deletion_preview(instance_name, cascade=True):
-    """Read-only counterpart of a deletion."""
-    return delete_instance_sparql(instance_name, cascade=cascade, dry_run=True)
+def collect_unlink_sets(holder, predicate, target):
+    """The owned/kept split for removing the link between the individual IRIs; a link that is not stored collects nothing."""
+    removed = (holder, predicate, target)
+    # The links into the target say whether the removed one is stored and whether the target is a coupled system.
+    into_target = {(subject, pred, obj): is_coupled_system for subject, pred, obj, is_coupled_system in _instance_links([target], 'o')}
+    if removed not in into_target or into_target[removed]:
+        return [], [target]
+    children, boundaries = _reachable_children(target)
+    incoming = [(subject, obj) for subject, pred, obj, _ in _instance_links(list(children), 'o') if (subject, pred, obj) != removed]
+    return partition_unlinked(holder, target, children, incoming, boundaries)
 
 
-def delete_instance_sparql(instance_name, cascade=True, dry_run=False):
-    """
-    Deletes an individual with every outgoing and incoming triple. With `cascade`
-    (the default) its owned subtree goes with it; with `dry_run` nothing is deleted.
+def unlink_sets(subj, prop_name, target, cascade=True):
+    """The {target, deleted, kept} result plus the owned IRIs for removing the link `subj` -has_prop-> `target`; a non-individual target is in neither set."""
+    predicate = term_iri(get_property_iri(prop_name))
+    result = {"target": target, "deleted": [], "kept": []}
+    if target is None or not instance_exists(target):
+        return result, []
+    if not cascade:
+        result["kept"] = [target]
+        return result, []
+    holder = term_iri(serialize_subject(subj))
+    owned, kept = collect_unlink_sets(holder, predicate, term_iri(serialize_iri(target)))
+    result["deleted"] = [get_local_name(iri) for iri in owned]
+    result["kept"] = [get_local_name(iri) for iri in kept]
+    return result, owned
 
-    Returns:
-        dict with `instance`, the `deleted` local names (the instance first), the
-        `kept` ones still reachable from outside the subtree, and `unlinked_from`:
-        surviving instances whose link to the deleted instance is removed.
-    """
-    if not instance_name:
-        raise ValueError("instance_name parameter is required.")
-    validate_local_name(instance_name)
-    if not is_individual(instance_name):
-        raise ValueError(f"Instance {instance_name} does not exist in GraphDB.")
-    root = f"{get_uri('')}{instance_name}"
 
-    owned, kept, referrers = collect_deletion_sets(root, cascade)
-    result = {
-        "instance": instance_name,
-        "deleted": [get_local_name(iri) for iri in owned],
-        "kept": [get_local_name(iri) for iri in kept],
-        "unlinked_from": [get_local_name(iri) for iri in referrers],
-    }
-    if dry_run:
-        return result
-
-    # One request, several operations: bounded VALUES blocks, still one transaction.
+def delete_individuals_operations(iris):
+    """SPARQL operations removing every outgoing and incoming triple of the IRIs, in bounded VALUES blocks."""
     operations = []
-    for batch in chunked(owned):
+    for batch in chunked(list(iris)):
         values = " ".join(f"<{iri}>" for iri in batch)
         operations.append(f"""
         DELETE {{
@@ -1614,7 +1620,49 @@ def delete_instance_sparql(instance_name, cascade=True, dry_run=False):
             }}
         }}
         """)
-    sparql_update(";\n".join(operations))
+    return operations
+
+
+def get_instance_deletion_preview(instance_name, cascade=True):
+    """Read-only counterpart of a deletion."""
+    return delete_instance_sparql(instance_name, cascade=cascade, dry_run=True)
+
+
+def get_value_deletion_preview(instance_name, prop_name, target):
+    """Read-only counterpart of `delete_value_sparql` for an object link."""
+    validate_subject_exists(instance_name)
+    result, _ = unlink_sets(instance_name, prop_name, target)
+    return result
+
+
+def delete_instance_sparql(instance_name, cascade=True, dry_run=False):
+    """
+    Deletes an individual with every outgoing and incoming triple. With `cascade`
+    (the default) its owned subtree goes with it; with `dry_run` nothing is deleted.
+
+    Returns:
+        dict with `instance`, the `deleted` local names (the instance first), the
+        `kept` ones still reachable from outside the subtree, and `unlinked_from`:
+        surviving instances whose link to the deleted instance is removed.
+    """
+    if not instance_name:
+        raise ValueError("instance_name parameter is required.")
+    if not instance_exists(instance_name):
+        raise ValueError(f"Instance {instance_name} does not exist in GraphDB.")
+    root = term_iri(serialize_iri(instance_name))
+
+    owned, kept, referrers = collect_deletion_sets(root, cascade)
+    result = {
+        "instance": instance_name,
+        "deleted": [get_local_name(iri) for iri in owned],
+        "kept": [get_local_name(iri) for iri in kept],
+        "unlinked_from": [get_local_name(iri) for iri in referrers],
+    }
+    if dry_run:
+        return result
+
+    # One request, several operations: still one transaction.
+    sparql_update(";\n".join(delete_individuals_operations(owned)))
     return result
 
 

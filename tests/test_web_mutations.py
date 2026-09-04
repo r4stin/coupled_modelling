@@ -157,19 +157,22 @@ class TestWebMutations(unittest.TestCase):
 
         # Run deletion
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
-        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json(), {"status": "success", "target": None, "deleted": [], "kept": []})
 
         # Confirm deleted
         self.assertFalse(main.query_graphdb(query_before).get("boolean", False))
 
     def test_delete_value_object_success(self):
+        # cascade off: the fixture object must survive for the sibling tests.
         payload = {
             "instance": self.test_inst,
             "property": "connect_to",
             "value": {
                 "kind": "object",
                 "id": self.test_obj
-            }
+            },
+            "cascade": False
         }
         # First verify it is there
         query_before = f"""
@@ -183,10 +186,12 @@ class TestWebMutations(unittest.TestCase):
 
         # Run deletion
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
-        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json(), {"status": "success", "target": self.test_obj, "deleted": [], "kept": [self.test_obj]})
 
         # Confirm deleted
         self.assertFalse(main.query_graphdb(query_before).get("boolean", False))
+        self.assertTrue(main.instance_exists(self.test_obj))
 
     def test_delete_value_validation_subject_missing(self):
         payload = {
@@ -214,7 +219,9 @@ class TestWebMutations(unittest.TestCase):
             }
         }
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
-        self.assertEqual(res.status_code, 201)
+        self.assertEqual(res.status_code, 200)
+        # Not an individual: neither collected nor kept.
+        self.assertEqual(res.get_json(), {"status": "success", "target": "instance_does_not_exist", "deleted": [], "kept": []})
 
     def test_replace_value_missing_params(self):
         res = self.app.post('/api/v1.0/replace_value/', json={"instance": self.test_inst, "property": "echo_level"})
@@ -443,6 +450,136 @@ class TestWebMutations(unittest.TestCase):
         self.assertEqual(self.app.get('/api/v1.0/get_instance_deletion_preview/').status_code, 400)
         missing = self.app.get('/api/v1.0/get_instance_deletion_preview/?instance=instance_missing_zz')
         self.assertEqual(missing.status_code, 400)
+
+    def _unlink(self, holder, prop, target, **extra):
+        payload = {"instance": holder, "property": prop, "value": {"kind": "object", "id": target}, **extra}
+        return self.app.post('/api/v1.0/delete_value/', json=payload)
+
+    def _insert_link(self, subject, prop, obj):
+        main.sparql_update(f"INSERT DATA {{ GRAPH <{self.onto_uri}> {{ {main.serialize_iri(subject)} {main.serialize_iri(prop)} {main.serialize_iri(obj)} . }} }}")
+
+    def _assert_unlink_sets(self, body, names):
+        """
+        Unlinking the child from the root: its exclusive branch goes; the shared term,
+        the other system and the root (reached through the shared term's back-link) stay.
+        """
+        self.assertEqual(body["target"], names['child'])
+        self.assertEqual(body["deleted"][0], names['child'])
+        self.assertEqual(set(body["deleted"]), {names['child'], names['grandchild'], names['exclusive']})
+        self.assertEqual(set(body["kept"]), {names['shared'], names['sharedchild'], names['othersystem'], names['root']})
+
+    def test_delete_value_collects_the_unlinked_subtree(self):
+        names = self._seed_subtree()
+        res = self._unlink(names['root'], 'solver_settings', names['child'])
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(body["status"], "success")
+        self._assert_unlink_sets(body, names)
+        self.assertFalse(self._link_exists(names['root'], 'has_solver_settings', names['child']))
+        for key in ('child', 'grandchild', 'exclusive'):
+            self.assertFalse(main.instance_exists(names[key]), key)
+        for key in ('root', 'shared', 'sharedchild', 'outsider', 'othersystem'):
+            self.assertTrue(main.instance_exists(names[key]), key)
+        self.assertTrue(self._link_exists(names['outsider'], 'has_type', names['shared']))
+
+    def test_delete_value_keeps_a_target_still_linked_from_elsewhere(self):
+        names = self._seed_subtree()
+        res = self._unlink(names['child'], 'type', names['shared'])
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual((body["target"], body["deleted"], body["kept"]), (names['shared'], [], [names['shared']]))
+        self.assertFalse(self._link_exists(names['child'], 'has_type', names['shared']))
+        self.assertTrue(main.instance_exists(names['sharedchild']))
+
+    def test_delete_value_keeps_a_coupled_system_target(self):
+        names = self._seed_subtree()
+        res = self._unlink(names['child'], 'connect_to', names['othersystem'])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["kept"], [names['othersystem']])
+        self.assertFalse(self._link_exists(names['child'], 'has_connect_to', names['othersystem']))
+        self.assertTrue(main.instance_exists(names['othersystem']))
+
+    def test_delete_value_without_cascade_keeps_the_target(self):
+        names = self._seed_subtree()
+        res = self._unlink(names['root'], 'solver_settings', names['child'], cascade=False)
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual((body["deleted"], body["kept"]), ([], [names['child']]))
+        self.assertFalse(self._link_exists(names['root'], 'has_solver_settings', names['child']))
+        self.assertTrue(main.instance_exists(names['grandchild']))
+
+    def test_delete_value_of_one_of_two_links_to_the_same_target_keeps_it(self):
+        names = self._seed_subtree()
+        self._insert_link(names['root'], 'has_connect_to', names['child'])
+        res = self._unlink(names['root'], 'solver_settings', names['child'])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["kept"], [names['child']])
+        self.assertFalse(self._link_exists(names['root'], 'has_solver_settings', names['child']))
+        self.assertTrue(self._link_exists(names['root'], 'has_connect_to', names['child']))
+
+    def test_delete_value_of_a_link_that_is_not_stored_collects_nothing(self):
+        # An orphan with no incoming link at all: only the stored-link rule protects it.
+        names = self._seed_subtree()
+        orphan = self.app.post('/api/v1.0/create_class_instance/', json={"class": "solvers", "label": "orphan"}).get_json()
+        res = self._unlink(names['root'], 'solvers', orphan)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual((res.get_json()["deleted"], res.get_json()["kept"]), ([], [orphan]))
+        self.assertTrue(main.instance_exists(orphan))
+
+    def test_delete_value_of_a_self_link_keeps_the_holder(self):
+        names = self._seed_subtree()
+        self._insert_link(names['child'], 'has_connect_to', names['child'])
+        res = self._unlink(names['child'], 'connect_to', names['child'])
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()["kept"], [names['child']])
+        self.assertFalse(self._link_exists(names['child'], 'has_connect_to', names['child']))
+        self.assertTrue(main.instance_exists(names['child']))
+
+    def test_delete_value_of_a_class_link_collects_nothing(self):
+        names = self._seed_subtree()
+        res = self._unlink(names['child'], 'type', 'solver_settings')
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual((body["target"], body["deleted"], body["kept"]), ('solver_settings', [], []))
+        self.assertFalse(self._link_exists(names['child'], 'has_type', 'solver_settings'))
+        class_ask = f"ASK {{ GRAPH <{self.onto_uri}> {{ {main.serialize_iri('solver_settings')} {main.RDF_TYPE} <http://www.w3.org/2002/07/owl#Class> . }} }}"
+        self.assertTrue(main.query_graphdb(class_ask)["boolean"])
+
+    def test_delete_value_rejects_non_boolean_cascade(self):
+        res = self._unlink(self.test_inst, 'connect_to', self.test_obj, cascade='yes')
+        self.assertEqual(res.status_code, 400)
+
+    def test_value_deletion_preview_matches_the_unlink_without_deleting(self):
+        names = self._seed_subtree()
+        res = self.app.get(f"/api/v1.0/get_value_deletion_preview/?instance={names['root']}&property=solver_settings&target={names['child']}")
+        self.assertEqual(res.status_code, 200)
+        self._assert_unlink_sets(res.get_json(), names)
+        self.assertTrue(self._link_exists(names['root'], 'has_solver_settings', names['child']))
+        self.assertTrue(main.instance_exists(names['exclusive']))
+
+    def test_value_deletion_preview_errors(self):
+        url = '/api/v1.0/get_value_deletion_preview/'
+        self.assertEqual(self.app.get(f'{url}?instance={self.test_inst}&property=connect_to').status_code, 400)
+        self.assertEqual(self.app.get(f'{url}?instance=instance_missing_zz&property=connect_to&target={self.test_obj}').status_code, 400)
+        self.assertEqual(self.app.get(f'{url}?instance={self.test_inst}&property=connect_to&target=bad%20name').status_code, 400)
+        self.assertEqual(self.app.get(f'{url}?instance={self.test_inst}&property=bad%20name&target=instance_missing_zz').status_code, 400)
+        self.assertEqual(self.app.get(f'{url}?instance=solver_settings&property=connect_to&target={self.test_obj}').status_code, 400)
+
+    def test_individual_rule_rejects_classes_and_properties(self):
+        self.assertTrue(main.instance_exists(self.test_inst))
+        self.assertFalse(main.instance_exists('solver_settings'))
+        self.assertFalse(main.instance_exists('has_solver_settings'))
+        self.assertEqual(self.app.get('/api/v1.0/get_instance_property_metadata/?instance=solver_settings').status_code, 400)
+        self.assertEqual(self.app.post('/api/v1.0/add_values/', json={"instance": "solver_settings", "data": {"echo_level": 1}}).status_code, 400)
+        self.assertEqual(self.app.post('/api/v1.0/create_instance/', json={"property": "solver_settings", "parent": "coupled_system"}).status_code, 400)
+        res = self.app.post('/api/v1.0/replace_value/', json={
+            "instance": self.test_inst,
+            "property": "connect_to",
+            "old_value": {"kind": "object", "id": self.test_obj},
+            "new_value": {"kind": "object", "id": "has_name"},
+        })
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("does not exist", res.get_json()["error"])
 
     def test_instance_metadata_describes_linked_objects(self):
         # Re-assert the link: sibling tests in this class delete the fixture's

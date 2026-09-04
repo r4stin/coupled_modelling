@@ -4,7 +4,7 @@ import unittest
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend'))
 
-from main import partition_subtree
+from main import partition_subtree, partition_unlinked
 
 
 def graph(*edges):
@@ -79,6 +79,52 @@ class TestPartitionSubtree(unittest.TestCase):
         self.assertEqual(owned, ['root', 'a'])
         self.assertEqual(kept, [])
         self.assertEqual(referrers, ['p', 'q'])
+
+
+class TestPartitionUnlinked(unittest.TestCase):
+    """Hermetic checks of the unlink split (no GraphDB). `incoming` never holds the removed link h -> t."""
+
+    def test_orphaned_target_is_collected_with_its_subtree(self):
+        owned, kept = partition_unlinked('h', 't', graph(('t', 'a'), ('a', 'b')), [('t', 'a'), ('a', 'b')])
+        self.assertEqual((owned, kept), (['t', 'a', 'b'], []))
+
+    def test_target_linked_from_elsewhere_survives_untouched(self):
+        owned, kept = partition_unlinked('h', 't', graph(('t', 'a')), [('x', 't'), ('t', 'a')])
+        self.assertEqual((owned, kept), ([], ['t']))
+
+    def test_target_reached_through_a_kept_node_survives(self):
+        children = graph(('t', 'a'), ('a', 's'), ('s', 't'))
+        owned, kept = partition_unlinked('h', 't', children, [('x', 's'), ('a', 's'), ('s', 't'), ('t', 'a')])
+        self.assertEqual((owned, kept), ([], ['t']))
+
+    def test_boundary_target_survives(self):
+        owned, kept = partition_unlinked('h', 't', {'t': set()}, [], boundaries={'t'})
+        self.assertEqual((owned, kept), ([], ['t']))
+
+    def test_shared_descendants_are_kept_when_the_target_is_collected(self):
+        children = graph(('t', 'a'), ('a', 's'), ('s', 'd'))
+        owned, kept = partition_unlinked('h', 't', children, [('t', 'a'), ('a', 's'), ('x', 's'), ('s', 'd')])
+        self.assertEqual((owned, kept), (['t', 'a'], ['d', 's']))
+
+    def test_holder_inside_the_subtree_survives_while_the_target_is_collected(self):
+        # Only the target links to the holder: the holder is an anchor, never garbage.
+        children = graph(('t', 'h'))
+        owned, kept = partition_unlinked('h', 't', children, [('t', 'h')])
+        self.assertEqual((owned, kept), (['t'], ['h']))
+
+    def test_what_the_holder_still_reaches_is_kept(self):
+        children = graph(('t', 'a'), ('t', 'h'), ('h', 'a'))
+        owned, kept = partition_unlinked('h', 't', children, [('t', 'a'), ('t', 'h'), ('h', 'a')])
+        self.assertEqual((owned, kept), (['t'], ['a', 'h']))
+
+    def test_self_link_never_collects_the_holder(self):
+        owned, kept = partition_unlinked('t', 't', {'t': set()}, [])
+        self.assertEqual((owned, kept), ([], ['t']))
+
+    def test_holder_reached_through_a_back_link_is_kept_and_does_not_block(self):
+        children = graph(('t', 'a'), ('a', 'h'))
+        owned, kept = partition_unlinked('h', 't', children, [('t', 'a'), ('a', 'h')])
+        self.assertEqual((owned, kept), (['t', 'a'], ['h']))
 
 
 if __name__ == '__main__':

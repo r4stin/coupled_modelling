@@ -114,6 +114,47 @@ class TestExplorerApi(unittest.TestCase):
         response = self.app.get('/api/v1.0/get_instance_property_metadata/?instance=instance_cfd')
         self.assertEqual(response.status_code, 400)
 
+    @patch('api.get_value_deletion_preview')
+    def test_get_value_deletion_preview_passes_parameters(self, mock_helper):
+        mock_helper.return_value = {"target": "instance_c", "deleted": ["instance_c"], "kept": []}
+        response = self.app.get('/api/v1.0/get_value_deletion_preview/?instance=instance_a&property=solver&target=instance_c')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), mock_helper.return_value)
+        mock_helper.assert_called_once_with('instance_a', 'solver', 'instance_c')
+
+    @patch('api.get_value_deletion_preview')
+    def test_get_value_deletion_preview_requires_every_parameter(self, mock_helper):
+        for query in ('instance=a&property=b', 'instance=a&target=c', 'property=b&target=c'):
+            self.assertEqual(self.app.get(f'/api/v1.0/get_value_deletion_preview/?{query}').status_code, 400, query)
+        mock_helper.assert_not_called()
+
+    @patch('api.get_value_deletion_preview')
+    def test_get_value_deletion_preview_error_mapping(self, mock_helper):
+        url = '/api/v1.0/get_value_deletion_preview/?instance=a&property=b&target=c'
+        mock_helper.side_effect = GraphDBError("GraphDB down")
+        self.assertEqual(self.app.get(url).status_code, 503)
+        mock_helper.side_effect = ValueError("Unknown instance")
+        self.assertEqual(self.app.get(url).status_code, 400)
+
+    @patch('api.delete_value_sparql')
+    def test_delete_value_route_returns_the_unlink_sets(self, mock_helper):
+        mock_helper.return_value = {"target": "instance_c", "deleted": ["instance_c"], "kept": []}
+        payload = {"instance": "instance_a", "property": "solver", "value": {"kind": "object", "id": "instance_c"}}
+        response = self.app.post('/api/v1.0/delete_value/', json=payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"status": "success", **mock_helper.return_value})
+        mock_helper.assert_called_once_with("instance_a", "solver", payload["value"], cascade=True)
+
+    @patch('api.delete_value_sparql')
+    def test_delete_value_route_validates_cascade(self, mock_helper):
+        payload = {"instance": "instance_a", "property": "solver", "value": {"kind": "object", "id": "instance_c"}, "cascade": "no"}
+        self.assertEqual(self.app.post('/api/v1.0/delete_value/', json=payload).status_code, 400)
+        mock_helper.assert_not_called()
+        mock_helper.return_value = {"target": "instance_c", "deleted": [], "kept": ["instance_c"]}
+        payload["cascade"] = False
+        self.assertEqual(self.app.post('/api/v1.0/delete_value/', json=payload).status_code, 200)
+        mock_helper.assert_called_once_with("instance_a", "solver", payload["value"], cascade=False)
+
     # --- Unit Tests: Label selection logic ---
 
     def test_select_preferred_label_rules(self):

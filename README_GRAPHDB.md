@@ -88,7 +88,7 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 * `test_sparql_mutations.py`: Tests the execution of SPARQL-based updates (inserting, deleting, and replacing properties on existing subjects).
 * `test_sparql_creation.py`: Tests direct instance instantiation, class validation against GraphDB, and safe prefix-isolated test teardowns.
 * `test_explorer_api.py`: Tests the explorer-facing API — Flask routing contracts, health error mapping (503/400), tree inheritance parsing, and global search.
-* `test_web_mutations.py`: Tests web mutation endpoints (`/delete_value/`, `/create_class_instance/`, `/download_owl/`, `/delete_instance/`), boolean string parsing safety, and GraphDB error codes.
+* `test_web_mutations.py`: Tests web mutation endpoints (`/delete_value/`, `/create_class_instance/`, `/download_owl/`, `/delete_instance/`, the two deletion previews), the individual-only existence rule, boolean string parsing safety, and GraphDB error codes.
 * `test_cors.py`: Tests the CORS headers exposed for the separate Next.js frontend (`CORS_ALLOWED_ORIGINS`).
 * `test_openapi_spec.py`: Verifies `openapi.yaml` stays in sync with the Flask routes (every route documented, no stale operations).
 
