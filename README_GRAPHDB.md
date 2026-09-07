@@ -107,9 +107,8 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 
 ## 8. API Reference (OpenAPI)
 
-The full REST API is documented in [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1): every endpoint under `/api/v1.0/` with request/response schemas, error contracts (`400`/`503`/`500`), and which architecture path (direct SPARQL vs. in-memory Owlready2) serves it.
+The REST API is documented by [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), generated from the route declarations in `backend/api.py` and the models in `backend/schemas.py`: every endpoint under `/api/v1.0/` with request/response schemas, error contracts (`400`/`503`/`500`), and which architecture path (direct SPARQL vs. in-memory Owlready2) serves it.
 
-* **Served by the API itself:** the running backend exposes the spec at `http://localhost:5000/api/v1.0/openapi.yaml`, so clients and tooling can consume it without a repository checkout, and renders it as interactive documentation at `http://localhost:5000/api/v1.0/docs`.
-* **View it interactively:** paste the file into [editor.swagger.io](https://editor.swagger.io), or point any OpenAPI viewer at the URL above.
-* **Generate a typed client:** the Next.js frontend generates its TypeScript API types from the served spec (`npm run generate:api-types` in the frontend repo, using `openapi-typescript`).
-* **Kept in sync automatically:** `tests/test_openapi_spec.py` fails CI whenever a route is added, removed, or renamed without updating the spec.
+* **Served by the API itself:** the running backend exposes the document at `http://localhost:5000/api/v1.0/openapi.yaml` (JSON at `/api/v1.0/openapi.json`) and renders it as interactive documentation at `http://localhost:5000/api/v1.0/docs`.
+* **Regenerate after a route or model change:** `python backend/export_openapi.py` rewrites `openapi.yaml`; `tests/test_openapi_spec.py` fails CI whenever the committed file differs from the generated document.
+* **Generate a typed client:** the Next.js frontend generates its TypeScript API types from the served document (`npm run generate:api-types` in the frontend repo, using `openapi-typescript`).

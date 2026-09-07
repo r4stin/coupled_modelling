@@ -1,97 +1,76 @@
 import os
-import re
 import sys
 import unittest
+
+import yaml
+from fastapi.testclient import TestClient
 
 # Adjust paths to import from backend/
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend'))
 
-from fastapi.testclient import TestClient
 from api import app, router
 
 SPEC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'openapi.yaml')
 API_PREFIX = '/api/v1.0'
-HTTP_METHODS = {'get', 'post', 'put', 'patch', 'delete', 'options', 'head'}
+
+# Schema names the frontend's generated types are built from.
+FRONTEND_SCHEMAS = [
+    'Error', 'ScalarValue', 'HealthOk', 'HealthError', 'ClassHierarchyEntry', 'InstanceSummary', 'PreviewItem',
+    'ClassMetadata', 'Restriction', 'NamedReference', 'InstanceMetadata', 'InstancePropertyGroup',
+    'ObjectPropertyValue', 'LiteralPropertyValue', 'ObjectValueTarget', 'LiteralValueTarget', 'DeletionPreview',
+    'UnlinkResult', 'InstanceId', 'PropertyDataMap', 'KratosParameters', 'SearchResults', 'SearchClassResult',
+]
+FRONTEND_OPERATIONS = ['deleteInstance', 'deleteValue', 'searchEntities']
 
 
-def parse_spec_operations(spec_text):
-    """
-    Extracts {(path, METHOD)} pairs from the paths section of openapi.yaml
-    using indentation only, so no YAML library is required.
-    """
-    operations = set()
-    in_paths = False
-    current_path = None
-    for line in spec_text.splitlines():
-        if not line.strip() or line.lstrip().startswith('#'):
-            continue
-        indent = len(line) - len(line.lstrip())
-        stripped = line.strip()
-        if indent == 0:
-            in_paths = (stripped == 'paths:')
-            current_path = None
-            continue
-        if not in_paths:
-            continue
-        if indent == 2 and stripped.startswith('/') and stripped.endswith(':'):
-            current_path = stripped[:-1]
-        elif indent == 4 and current_path and stripped.rstrip(':') in HTTP_METHODS:
-            operations.add((current_path, stripped.rstrip(':').upper()))
-    return operations
-
-
-class TestOpenAPISpecCoverage(unittest.TestCase):
-    """Verifies openapi.yaml stays in sync with the routes in backend/api.py."""
+class TestOpenAPISpec(unittest.TestCase):
+    """The committed openapi.yaml is the document generated from the routes; the two must never drift."""
 
     @classmethod
     def setUpClass(cls):
-        with open(SPEC_PATH, encoding='utf-8') as f:
-            cls.spec_text = f.read()
-        cls.spec_operations = parse_spec_operations(cls.spec_text)
+        cls.generated = app.openapi()
+        with open(SPEC_PATH, encoding='utf-8') as spec_file:
+            cls.committed = yaml.safe_load(spec_file)
 
-    def get_app_operations(self):
-        """(path, METHOD) pairs of every route registered on the API router."""
-        operations = set()
-        for route in router.routes:
-            if not route.path.startswith(API_PREFIX) or not route.include_in_schema:
-                continue
-            for method in route.methods - {'OPTIONS', 'HEAD'}:
-                operations.add((route.path[len(API_PREFIX):], method))
-        return operations
+    def test_committed_document_equals_the_generated_one(self):
+        self.assertEqual(self.committed, self.generated, 'openapi.yaml is stale: run `python backend/export_openapi.py`')
 
-    def test_spec_parses_and_has_operations(self):
-        """The paths section parses and documents a plausible number of operations."""
-        self.assertIn('openapi:', self.spec_text)
-        self.assertGreaterEqual(len(self.spec_operations), 20)
-
-    def test_every_app_route_is_documented(self):
-        """Every /api/v1.0/ route the app registers appears in openapi.yaml."""
-        missing = self.get_app_operations() - self.spec_operations
-        self.assertEqual(
-            missing, set(),
-            f"Routes missing from openapi.yaml: {sorted(missing)}"
-        )
-
-    def test_every_documented_path_exists_in_app(self):
-        """openapi.yaml documents no operation that the app does not serve."""
-        stale = self.spec_operations - self.get_app_operations()
-        self.assertEqual(
-            stale, set(),
-            f"openapi.yaml operations with no matching route: {sorted(stale)}"
-        )
-
-    def test_spec_endpoint_serves_the_file(self):
-        """GET /api/v1.0/openapi.yaml serves the specification document."""
-        client = TestClient(app)
-        response = client.get('/api/v1.0/openapi.yaml')
+    def test_served_document_equals_the_generated_one(self):
+        response = TestClient(app).get(f'{API_PREFIX}/openapi.yaml')
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.text.startswith('openapi:'))
+        self.assertTrue(response.headers['content-type'].startswith('application/yaml'))
+        self.assertEqual(yaml.safe_load(response.text), self.generated)
 
-    def test_server_url_matches_api_prefix(self):
-        """The spec's server URL carries the /api/v1.0 prefix the routes omit."""
-        match = re.search(r'^\s*-\s*url:\s*(\S+)', self.spec_text, re.MULTILINE)
-        self.assertIsNotNone(match, "No server url found in openapi.yaml")
-        self.assertTrue(match.group(1).endswith(API_PREFIX))
+    def test_every_documented_route_is_registered_and_vice_versa(self):
+        registered = {(route.path, method) for route in router.routes if route.include_in_schema for method in route.methods}
+        documented = {(path, method.upper()) for path, item in self.generated['paths'].items() for method in item}
+        self.assertEqual(documented, registered)
+
+    def test_paths_carry_the_prefix_and_the_server_does_not(self):
+        self.assertTrue(all(path.startswith(API_PREFIX) for path in self.generated['paths']))
+        self.assertEqual([server['url'] for server in self.generated['servers']], ['http://localhost:5000'])
+
+    def test_no_validation_error_responses_the_app_never_emits(self):
+        for path, item in self.generated['paths'].items():
+            for method, operation in item.items():
+                self.assertNotIn('422', operation['responses'], f'{method.upper()} {path}')
+                self.assertIn('operationId', operation, f'{method.upper()} {path}')
+        self.assertNotIn('HTTPValidationError', self.generated['components']['schemas'])
+
+    def test_every_error_response_is_json(self):
+        for path, item in self.generated['paths'].items():
+            for method, operation in item.items():
+                for status, response in operation['responses'].items():
+                    if status.startswith(('4', '5')):
+                        self.assertEqual(list(response['content']), ['application/json'], f'{method.upper()} {path} {status}')
+
+    def test_frontend_contract_names_exist(self):
+        schemas = self.generated['components']['schemas']
+        self.assertEqual([name for name in FRONTEND_SCHEMAS if name not in schemas], [])
+        operation_ids = {operation['operationId'] for item in self.generated['paths'].values() for operation in item.values()}
+        self.assertEqual([name for name in FRONTEND_OPERATIONS if name not in operation_ids], [])
+        values = schemas['InstancePropertyGroup']['properties']['values']['items']
+        self.assertEqual(values['discriminator']['mapping']['literal'], '#/components/schemas/LiteralPropertyValue')
 
 
 if __name__ == '__main__':

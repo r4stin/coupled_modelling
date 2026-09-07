@@ -1,55 +1,34 @@
 openapi: 3.1.0
 info:
   title: Coupled Modelling API
-  version: 1.0.0
   summary: REST API for the coupled multiphysics simulation knowledge base.
-  description: |
-    HTTP API of the coupled_modelling backend: a knowledge base that stores
-    Kratos CoSimulation configurations as OWL/RDF in a GraphDB triple store.
-
-    The backend uses a hybrid architecture:
-
-    * **Direct SPARQL path** — reads and simple mutations (adding, replacing and
-      deleting property values, creating and deleting instances) are executed as
-      stateless SPARQL queries/updates directly against GraphDB.
-    * **In-memory semantic path** — structurally complex workflows (Kratos JSON
-      import/export, recursive instance copying, class-axiom inference) load the
-      ontology into Owlready2, operate on it in memory and synchronise the
-      result back to GraphDB.
-
-    Instances created through the API receive collision-resistant UUID
-    identifiers (for example `instance_550e8400-e29b-41d4-a716-446655440000`);
-    human-readable names are stored separately as `rdfs:label` annotations.
+  description: "HTTP API of the coupled_modelling backend: a knowledge base that stores\nKratos
+    CoSimulation configurations as OWL/RDF in a GraphDB triple store.\n\nThe backend
+    uses a hybrid architecture:\n\n* **Direct SPARQL path** — reads and simple mutations
+    (adding, replacing and\n  deleting property values, creating and deleting instances)
+    are executed as\n  stateless SPARQL queries/updates directly against GraphDB.\n*
+    **In-memory semantic path** — structurally complex workflows (Kratos JSON\n  import/export,
+    recursive instance copying, class-axiom inference) load the\n  ontology into Owlready2,
+    operate on it in memory and synchronise the\n  result back to GraphDB.\n\nInstances
+    created through the API receive collision-resistant UUID\nidentifiers (for example
+    `instance_550e8400-e29b-41d4-a716-446655440000`);\nhuman-readable names are stored
+    separately as `rdfs:label` annotations.\n"
   contact:
     name: coupled_modelling repository
     url: https://github.com/ldrbmrtv/coupled_modelling
+  version: 1.0.0
 servers:
-  - url: http://localhost:5000/api/v1.0
-    description: Local development server (uvicorn)
-tags:
-  - name: system
-    description: Health and connection status.
-  - name: explorer
-    description: Read-only metadata endpoints backing the web explorer (direct SPARQL).
-  - name: mutations
-    description: Stateless create/update/delete operations executed as direct SPARQL updates.
-  - name: semantic
-    description: Owlready2 in-memory workflows (Kratos import/export, copying, inference).
-  - name: files
-    description: Ontology file downloads and persistence.
-  - name: legacy
-    description: Early read endpoints kept for compatibility; the explorer endpoints supersede them.
-
+- url: http://localhost:5000
+  description: Local development server (uvicorn)
 paths:
-  /openapi.yaml:
+  /api/v1.0/openapi.yaml:
     get:
-      tags: [system]
-      operationId: getOpenApiSpec
+      tags:
+      - system
       summary: Download this OpenAPI specification
-      description: |
-        Serves this `openapi.yaml` document from the running backend, so
-        clients and tooling can generate typed bindings without a copy of the
-        repository.
+      description: Serves the OpenAPI document generated from the running backend,
+        so clients and tooling can generate typed bindings without a copy of the repository.
+      operationId: getOpenApiSpec
       responses:
         '200':
           description: The OpenAPI 3.1 specification in YAML.
@@ -57,13 +36,14 @@ paths:
             application/yaml:
               schema:
                 type: string
-
-  /health/:
+  /api/v1.0/health/:
     get:
-      tags: [system]
-      operationId: getHealth
+      tags:
+      - system
       summary: Check GraphDB connectivity
-      description: Verifies that the configured GraphDB repository answers a trivial `ASK` query.
+      description: Verifies that the configured GraphDB repository answers a trivial
+        `ASK` query.
+      operationId: getHealth
       responses:
         '200':
           description: GraphDB is reachable and the repository responds.
@@ -83,67 +63,94 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthError'
-
-  /get_class_hierarchy_metadata/:
+  /api/v1.0/get_class_hierarchy_metadata/:
     get:
-      tags: [explorer]
-      operationId: getClassHierarchyMetadata
+      tags:
+      - explorer
       summary: List all ontology classes with their direct parents
-      description: |
-        Returns every project-local OWL class together with the list of its
-        direct named superclasses. The frontend builds the class tree from the
-        parent arrays (classes with an empty `parents` array are roots).
+      description: 'Returns every project-local OWL class together with the list of
+        its direct named superclasses.
+
+        The frontend builds the class tree from the parent arrays (classes with an
+        empty `parents` array are roots).'
+      operationId: getClassHierarchyMetadata
       responses:
         '200':
           description: Alphabetically sorted class list.
           content:
             application/json:
               schema:
-                type: array
                 items:
                   $ref: '#/components/schemas/ClassHierarchyEntry'
+                type: array
+                title: Response Getclasshierarchymetadata
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /search/:
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/search/:
     get:
-      tags: [explorer]
-      operationId: searchEntities
+      tags:
+      - explorer
       summary: Search classes and instances by name or label
-      description: |
-        Case-insensitive substring search over the local names and labels of
-        project classes and instances. Each result group is capped at `limit`;
-        matches on a name prefix rank before other matches. Instance results
-        carry the same summary shape as `get_class_instance_summaries`.
+      description: 'Case-insensitive substring search over the local names and labels
+        of project classes and instances.
+
+        Each result group is capped at `limit`; matches on a name prefix rank before
+        other matches.
+
+        Instance results carry the same summary shape as `get_class_instance_summaries`.'
+      operationId: searchEntities
       parameters:
-        - name: q
-          in: query
-          required: true
+      - name: q
+        in: query
+        required: true
+        schema:
+          type: string
           description: Search text (matched as a case-insensitive substring).
-          schema:
-            type: string
-          example: mok
-        - name: type
-          in: query
-          required: false
+          examples:
+          - mok
+          title: Q
+        description: Search text (matched as a case-insensitive substring).
+      - name: type
+        in: query
+        required: false
+        schema:
+          enum:
+          - all
+          - class
+          - instance
+          type: string
           description: Restrict results to one entity kind.
-          schema:
-            type: string
-            enum: [all, class, instance]
-            default: all
-        - name: limit
-          in: query
-          required: false
+          default: all
+          title: Type
+        description: Restrict results to one entity kind.
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
           description: Maximum results per group (1-100).
-          schema:
-            type: integer
-            default: 20
-            minimum: 1
-            maximum: 100
+          default: 20
+          title: Limit
+        description: Maximum results per group (1-100).
       responses:
         '200':
           description: Matching classes and instances.
@@ -158,31 +165,47 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /get_class_instance_summaries/:
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_class_instance_summaries/:
     get:
-      tags: [explorer]
-      operationId: getClassInstanceSummaries
+      tags:
+      - explorer
       summary: List instance summaries for a class
-      description: |
-        Returns one summary per instance of the given class (including
-        instances of its subclasses, via `rdf:type/rdfs:subClassOf*`). Each
-        summary carries the resolved preferred label (English first, then
-        untagged, then other languages), the direct types, and a compact
-        preview of up to three property values for display under the instance
-        title. When `class` is omitted, summaries for all instances are
-        returned.
+      description: 'Returns one summary per instance of the given class (including
+        instances of its subclasses, via
+
+        `rdf:type/rdfs:subClassOf*`). Each summary carries the resolved preferred
+        label (English first, then
+
+        untagged, then other languages), the direct types, and a compact preview of
+        up to three property
+
+        values for display under the instance title. When `class` is omitted, summaries
+        for all instances are returned.'
+      operationId: getClassInstanceSummaries
       parameters:
-        - name: class
-          in: query
-          required: false
-          description: Local class name to list instances for (for example `solvers`). Omit for all instances.
-          schema:
-            type: string
-          example: solvers
+      - name: class
+        in: query
+        required: false
+        schema:
+          type: string
+          description: Local class name to list instances for (for example `solvers`).
+            Omit for all instances.
+          examples:
+          - solvers
+          title: Class
+        description: Local class name to list instances for (for example `solvers`).
+          Omit for all instances.
       responses:
         '200':
           description: Instance summaries sorted by label.
@@ -192,6 +215,7 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/InstanceSummary'
+                title: Response Getclassinstancesummaries
         '400':
           description: The class does not exist in GraphDB.
           content:
@@ -199,30 +223,44 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /get_class_metadata/:
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_class_metadata/:
     get:
-      tags: [explorer]
-      operationId: getClassMetadata
+      tags:
+      - explorer
       summary: Get class descriptions, hierarchy links and restriction axioms
-      description: |
-        Returns metadata backing the class inspector pane: `rdfs:comment` /
-        `skos:definition` descriptions, direct superclasses and subclasses,
-        named equivalent classes, and the OWL restriction axioms asserted on
-        the class (existential/universal/value restrictions and unqualified or
-        qualified cardinality restrictions, including intersection targets
-        expanded into their named member classes).
+      description: 'Returns metadata backing the class inspector pane: `rdfs:comment`
+        / `skos:definition` descriptions,
+
+        direct superclasses and subclasses, named equivalent classes, and the OWL
+        restriction axioms asserted on
+
+        the class (existential/universal/value restrictions and unqualified or qualified
+        cardinality restrictions,
+
+        including intersection targets expanded into their named member classes).'
+      operationId: getClassMetadata
       parameters:
-        - name: class
-          in: query
-          required: true
+      - name: class
+        in: query
+        required: true
+        schema:
+          type: string
           description: Local class name (for example `coupled_system`).
-          schema:
-            type: string
-          example: coupled_system
+          examples:
+          - coupled_system
+          title: Class
+        description: Local class name (for example `coupled_system`).
       responses:
         '200':
           description: Class metadata.
@@ -237,28 +275,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /get_instance_property_metadata/:
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_instance_property_metadata/:
     get:
-      tags: [explorer]
-      operationId: getInstancePropertyMetadata
+      tags:
+      - explorer
       summary: Get an instance's direct properties with type metadata
-      description: |
-        Returns the direct outgoing statements of an instance, grouped per
-        property and sorted, with each value tagged as an `object` reference
-        (id plus resolved label) or a typed `literal` (JSON-native value plus
-        XSD datatype). Property names are returned without the `has_` prefix.
+      description: 'Returns the direct outgoing statements of an instance, grouped
+        per property and sorted, with each value
+
+        tagged as an `object` reference (id plus resolved label) or a typed `literal`
+        (JSON-native value plus XSD
+
+        datatype). Property names are returned without the `has_` prefix.'
+      operationId: getInstancePropertyMetadata
       parameters:
-        - name: instance
-          in: query
-          required: true
+      - name: instance
+        in: query
+        required: true
+        schema:
+          type: string
           description: Local instance identifier.
-          schema:
-            type: string
-          example: instance_550e8400-e29b-41d4-a716-446655440000
+          examples:
+          - instance_550e8400-e29b-41d4-a716-446655440000
+          title: Instance
+        description: Local instance identifier.
       responses:
         '200':
           description: Instance metadata for the inspector pane.
@@ -267,297 +318,63 @@ paths:
               schema:
                 $ref: '#/components/schemas/InstanceMetadata'
         '400':
-          description: Missing `instance` parameter, or the identifier is not an existing individual (classes and properties do not count).
+          description: Missing `instance` parameter, or the identifier is not an existing
+            individual (classes and properties do not count).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /create_instance/:
-    post:
-      tags: [mutations]
-      operationId: createInstance
-      summary: Create an instance linked to a parent (direct SPARQL)
-      description: |
-        Creates a new UUID-named instance of class `property`, links it to the
-        existing `parent` instance via the corresponding `has_<property>`
-        object property, and optionally asserts initial property values from
-        `data`. String values that match the label of an existing instance of
-        the property's class are resolved to object references; creating
-        nested individuals inline is rejected.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [property, parent]
-              properties:
-                property:
-                  type: string
-                  description: Class name of the new instance (also selects the `has_*` linking property).
-                  example: solvers
-                parent:
-                  type: string
-                  description: Identifier of the existing parent instance.
-                data:
-                  $ref: '#/components/schemas/PropertyDataMap'
-      responses:
-        '201':
-          description: Identifier of the created instance.
+          description: GraphDB is unreachable or the repository is offline.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/InstanceId'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
+                $ref: '#/components/schemas/Error'
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /create_class_instance/:
-    post:
-      tags: [mutations]
-      operationId: createClassInstance
-      summary: Create a standalone labelled instance (direct SPARQL)
-      description: Creates a new UUID-named instance of the given class with an `rdfs:label`, without linking it to a parent.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [class, label]
-              properties:
-                class:
-                  type: string
-                  description: Class to instantiate.
-                  example: solvers
-                label:
-                  type: string
-                  description: Human-readable label stored as `rdfs:label`.
-                  example: Airfoil fluid solver
-      responses:
-        '201':
-          description: Identifier of the created instance.
+          description: Unexpected server error.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/InstanceId'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /add_values/:
-    post:
-      tags: [mutations]
-      operationId: addValues
-      summary: Add property values to an instance (direct SPARQL)
-      description: |
-        Inserts the given property values for an existing instance in a single
-        SPARQL update transaction. List values produce one triple per element.
-        Plain string values are kept as literals for datatype properties; for
-        object properties they are resolved to an existing instance of the
-        property's class by label, or a new labeled instance is created when no
-        match exists. Explicit `instance*` references must already exist.
-      requestBody:
-        $ref: '#/components/requestBodies/InstanceDataBody'
-      responses:
-        '201':
-          $ref: '#/components/responses/EmptyCreated'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /replace_values/:
-    post:
-      tags: [mutations]
-      operationId: replaceValues
-      summary: Replace property values on an instance (direct SPARQL)
-      description: |
-        Replaces the existing values of each property in `data` with the given
-        new values in a single SPARQL update transaction. An empty list (`[]`)
-        removes all values of that property.
-      requestBody:
-        $ref: '#/components/requestBodies/InstanceDataBody'
-      responses:
-        '201':
-          $ref: '#/components/responses/EmptyCreated'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /replace_properties/:
-    post:
-      tags: [mutations]
-      operationId: replaceProperties
-      summary: Replace an instance's property set (direct SPARQL)
-      description: |
-        Removes the instance's existing `has_*` and `rdfs:label` statements and
-        asserts the given data instead, preserving structural metadata
-        (`rdf:type`, `rdfs:comment`).
-      requestBody:
-        $ref: '#/components/requestBodies/InstanceDataBody'
-      responses:
-        '201':
-          $ref: '#/components/responses/EmptyCreated'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /replace_value/:
-    post:
-      tags: [mutations]
-      operationId: replaceValue
-      summary: Atomically replace one specific property value (direct SPARQL)
-      description: >
-        Replaces one stored value with another in a single SPARQL update. The old value
-        is matched by value equality (dangling references allowed); the new value keeps
-        its exact datatype and language tag. When the old value no longer exists, the
-        update is a no-op. Replacing an object value removes the old link only; the
-        previous target is not garbage-collected.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [instance, property, old_value, new_value]
-              properties:
-                instance:
-                  type: string
-                  description: Instance identifier.
-                property:
-                  type: string
-                  description: Property name (without the `has_` prefix).
-                old_value:
-                  description: The currently stored value to replace.
-                  oneOf:
-                    - $ref: '#/components/schemas/ObjectValueTarget'
-                    - $ref: '#/components/schemas/LiteralValueTarget'
-                new_value:
-                  description: The replacement value.
-                  oneOf:
-                    - $ref: '#/components/schemas/ObjectValueTarget'
-                    - $ref: '#/components/schemas/LiteralValueTarget'
-      responses:
-        '201':
-          $ref: '#/components/responses/EmptyCreated'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /delete_value/:
-    post:
-      tags: [mutations]
-      operationId: deleteValue
-      summary: Delete a single property value (direct SPARQL)
-      description: |
-        Removes the triple. When the value is an object link and `cascade` is set
-        (the default), the linked instance's owned subtree is deleted as well if
-        nothing else reaches it afterwards: the same ownership rule as
-        `delete_instance`. A coupled system, a target still linked from elsewhere,
-        a link that is not stored, and the instance holding the link are never
-        collected. The removal and the collection run in one transactional
-        update. Use `get_value_deletion_preview` to see the outcome first.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [instance, property, value]
-              properties:
-                instance:
-                  type: string
-                  description: Instance identifier.
-                property:
-                  type: string
-                  description: Property name (without the `has_` prefix).
-                  example: parallel_type
-                value:
-                  description: >
-                    The value to delete. The typed forms delete the exact triple (correct
-                    datatype serialization); a bare scalar is matched by serialization guess.
-                  oneOf:
-                    - $ref: '#/components/schemas/ObjectValueTarget'
-                    - $ref: '#/components/schemas/LiteralValueTarget'
-                    - $ref: '#/components/schemas/ScalarValue'
-                cascade:
-                  type: boolean
-                  default: true
-                  description: Also delete the unlinked instance's owned subtree when nothing else reaches it.
-      responses:
-        '200':
-          description: The value was deleted.
-          content:
-            application/json:
-              schema:
-                allOf:
-                  - $ref: '#/components/schemas/UnlinkResult'
-                  - type: object
-                    required: [status]
-                    properties:
-                      status:
-                        type: string
-                        const: success
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /get_value_deletion_preview/:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_value_deletion_preview/:
     get:
-      tags: [explorer]
-      operationId: getValueDeletionPreview
+      tags:
+      - explorer
       summary: Preview what removing an object link would delete
-      description: |
-        Read-only counterpart of `delete_value` for an object link: whether the
-        linked instance would be deleted with its owned subtree (nothing else
-        reaches it afterwards) or kept.
+      description: 'Read-only counterpart of `delete_value` for an object link: whether
+        the linked instance would be deleted
+
+        with its owned subtree (nothing else reaches it afterwards) or kept.'
+      operationId: getValueDeletionPreview
       parameters:
-        - name: instance
-          in: query
-          required: true
+      - name: instance
+        in: query
+        required: true
+        schema:
+          type: string
           description: Identifier of the instance holding the link.
-          schema:
-            type: string
-          example: instance_550e8400-e29b-41d4-a716-446655440000
-        - name: property
-          in: query
-          required: true
+          examples:
+          - instance_550e8400-e29b-41d4-a716-446655440000
+          title: Instance
+        description: Identifier of the instance holding the link.
+      - name: property
+        in: query
+        required: true
+        schema:
+          type: string
           description: Property name (without the `has_` prefix).
-          schema:
-            type: string
-          example: solver_settings
-        - name: target
-          in: query
-          required: true
+          examples:
+          - solver_settings
+          title: Property
+        description: Property name (without the `has_` prefix).
+      - name: target
+        in: query
+        required: true
+        schema:
+          type: string
           description: Identifier of the linked instance.
-          schema:
-            type: string
+          title: Target
+        description: Identifier of the linked instance.
       responses:
         '200':
           description: The unlink preview.
@@ -566,121 +383,55 @@ paths:
               schema:
                 $ref: '#/components/schemas/UnlinkResult'
         '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /delete_values/:
-    post:
-      tags: [mutations]
-      operationId: deleteValues
-      summary: Delete all values of the given properties (direct SPARQL)
-      description: Removes the triples only; unlinked instances are not garbage-collected.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [instance, properties]
-              properties:
-                instance:
-                  type: string
-                  description: Instance identifier.
-                properties:
-                  type: array
-                  description: Property names whose values are removed (without the `has_` prefix).
-                  items:
-                    type: string
-                  example: [echo_level, parallel_type]
-      responses:
-        '201':
-          $ref: '#/components/responses/EmptyCreated'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
-        '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /delete_instance/:
-    post:
-      tags: [mutations]
-      operationId: deleteInstance
-      summary: Delete an instance and, by default, its owned subtree (direct SPARQL)
-      description: |
-        Removes every outgoing and incoming triple of the instance in one
-        transactional SPARQL update. With `cascade` (the default) the instance's
-        owned subtree goes with it: every individual reachable through `has_*`
-        links that is not reachable from outside the subtree. Coupled systems are
-        never owned by another instance, so traversal stops at them. Individuals
-        still reachable from elsewhere (an instance linked from outside and
-        everything below it, shared vocabulary terms for example) are kept and
-        reported in `kept`. With `cascade: false` only the instance itself is
-        removed and its children are left in place. Use
-        `get_instance_deletion_preview` to see the sets before deleting.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [instance]
-              properties:
-                instance:
-                  type: string
-                  description: Identifier of the instance to delete.
-                cascade:
-                  type: boolean
-                  default: true
-                  description: Also delete the instance's owned subtree.
-      responses:
-        '200':
-          description: The instance was deleted.
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
           content:
             application/json:
               schema:
-                allOf:
-                  - $ref: '#/components/schemas/DeletionPreview'
-                  - type: object
-                    required: [status]
-                    properties:
-                      status:
-                        type: string
-                        const: success
-        '400':
-          $ref: '#/components/responses/BadRequest'
+                $ref: '#/components/schemas/Error'
         '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /get_instance_deletion_preview/:
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_instance_deletion_preview/:
     get:
-      tags: [explorer]
-      operationId: getInstanceDeletionPreview
+      tags:
+      - explorer
       summary: Preview what a cascading deletion of an instance would remove
-      description: |
-        Read-only counterpart of `delete_instance`: the instances that would be
-        deleted (the requested one first), the reachable ones that would be kept,
-        and the surviving instances whose link would be removed.
+      description: 'Read-only counterpart of `delete_instance`: the instances that
+        would be deleted (the requested one first),
+
+        the reachable ones that would be kept, and the surviving instances whose link
+        would be removed.'
+      operationId: getInstanceDeletionPreview
       parameters:
-        - name: instance
-          in: query
-          required: true
+      - name: instance
+        in: query
+        required: true
+        schema:
+          type: string
           description: Local instance identifier.
-          schema:
-            type: string
-          example: instance_550e8400-e29b-41d4-a716-446655440000
-        - name: cascade
-          in: query
-          required: false
+          examples:
+          - instance_550e8400-e29b-41d4-a716-446655440000
+          title: Instance
+        description: Local instance identifier.
+      - name: cascade
+        in: query
+        required: false
+        schema:
+          type: boolean
           description: Preview the cascading (default) or the single-instance deletion.
-          schema:
-            type: boolean
-            default: true
+          default: true
+          title: Cascade
+        description: Preview the cascading (default) or the single-instance deletion.
       responses:
         '200':
           description: The deletion preview.
@@ -689,36 +440,459 @@ paths:
               schema:
                 $ref: '#/components/schemas/DeletionPreview'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '503':
-          $ref: '#/components/responses/GraphDBUnavailable'
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /import_coupled_kratos/:
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/create_instance/:
     post:
-      tags: [semantic]
-      operationId: importCoupledKratos
-      summary: Import a Kratos CoSimulation JSON configuration
-      description: |
-        Recursively converts a Kratos CoSimulation parameters JSON object into
-        OWL instances (CoSim2OWL), infers class-restriction axioms for the
-        imported structure, and persists the updated ontology to GraphDB.
-        Runs on the in-memory Owlready2 path.
+      tags:
+      - mutations
+      summary: Create an instance linked to a parent (direct SPARQL)
+      description: 'Creates a new UUID-named instance of class `property`, links it
+        to the existing `parent` instance via the
+
+        corresponding `has_<property>` object property, and optionally asserts initial
+        property values from `data`.
+
+        String values that match the label of an existing instance of the property''s
+        class are resolved to object
+
+        references; creating nested individuals inline is rejected.'
+      operationId: createInstance
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [data, label]
-              properties:
-                data:
-                  $ref: '#/components/schemas/KratosParameters'
-                label:
-                  type: string
-                  description: Label for the imported coupled system.
-                  example: FSI Mok benchmark
+              $ref: '#/components/schemas/CreateInstanceBody'
+        required: true
+      responses:
+        '201':
+          description: Identifier of the created instance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceId'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/create_class_instance/:
+    post:
+      tags:
+      - mutations
+      summary: Create a standalone labelled instance (direct SPARQL)
+      description: Creates a new UUID-named instance of the given class with an `rdfs:label`,
+        without linking it to a parent.
+      operationId: createClassInstance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateClassInstanceBody'
+        required: true
+      responses:
+        '201':
+          description: Identifier of the created instance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceId'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/add_values/:
+    post:
+      tags:
+      - mutations
+      summary: Add property values to an instance (direct SPARQL)
+      description: 'Inserts the given property values for an existing instance in
+        a single SPARQL update transaction. List
+
+        values produce one triple per element. Plain string values are kept as literals
+        for datatype properties; for
+
+        object properties they are resolved to an existing instance of the property''s
+        class by label, or a new labeled
+
+        instance is created when no match exists. Explicit `instance*` references
+        must already exist.'
+      operationId: addValues
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceDataBody'
+        required: true
+      responses:
+        '201':
+          description: The operation succeeded. The body is an empty JSON string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyBody'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/replace_values/:
+    post:
+      tags:
+      - mutations
+      summary: Replace property values on an instance (direct SPARQL)
+      description: 'Replaces the existing values of each property in `data` with the
+        given new values in a single SPARQL update
+
+        transaction. An empty list (`[]`) removes all values of that property.'
+      operationId: replaceValues
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceDataBody'
+        required: true
+      responses:
+        '201':
+          description: The operation succeeded. The body is an empty JSON string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyBody'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/replace_properties/:
+    post:
+      tags:
+      - mutations
+      summary: Replace an instance's property set (direct SPARQL)
+      description: 'Removes the instance''s existing `has_*` and `rdfs:label` statements
+        and asserts the given data instead,
+
+        preserving structural metadata (`rdf:type`, `rdfs:comment`).'
+      operationId: replaceProperties
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstanceDataBody'
+        required: true
+      responses:
+        '201':
+          description: The operation succeeded. The body is an empty JSON string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyBody'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/replace_value/:
+    post:
+      tags:
+      - mutations
+      summary: Atomically replace one specific property value (direct SPARQL)
+      description: 'Replaces one stored value with another in a single SPARQL update.
+        The old value is matched by value equality
+
+        (dangling references allowed); the new value keeps its exact datatype and
+        language tag. When the old value no
+
+        longer exists, the update is a no-op. Replacing an object value removes the
+        old link only; the previous target
+
+        is not garbage-collected.'
+      operationId: replaceValue
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceValueBody'
+        required: true
+      responses:
+        '201':
+          description: The operation succeeded. The body is an empty JSON string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyBody'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/delete_value/:
+    post:
+      tags:
+      - mutations
+      summary: Delete a single property value (direct SPARQL)
+      description: 'Removes the triple. When the value is an object link and `cascade`
+        is set (the default), the linked instance''s
+
+        owned subtree is deleted as well if nothing else reaches it afterwards: the
+        same ownership rule as
+
+        `delete_instance`. A coupled system, a target still linked from elsewhere,
+        a link that is not stored, and the
+
+        instance holding the link are never collected. The removal and the collection
+        run in one transactional update.
+
+        Use `get_value_deletion_preview` to see the outcome first.'
+      operationId: deleteValue
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteValueBody'
+        required: true
+      responses:
+        '200':
+          description: The value was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueDeletionResult'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/delete_values/:
+    post:
+      tags:
+      - mutations
+      summary: Delete all values of the given properties (direct SPARQL)
+      description: Removes the triples only; unlinked instances are not garbage-collected.
+      operationId: deleteValues
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteValuesBody'
+        required: true
+      responses:
+        '201':
+          description: The operation succeeded. The body is an empty JSON string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyBody'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/delete_instance/:
+    post:
+      tags:
+      - mutations
+      summary: Delete an instance and, by default, its owned subtree (direct SPARQL)
+      description: 'Removes every outgoing and incoming triple of the instance in
+        one transactional SPARQL update. With `cascade`
+
+        (the default) the instance''s owned subtree goes with it: every individual
+        reachable through `has_*` links that
+
+        is not reachable from outside the subtree. Coupled systems are never owned
+        by another instance, so traversal
+
+        stops at them. Individuals still reachable from elsewhere (an instance linked
+        from outside and everything below
+
+        it, shared vocabulary terms for example) are kept and reported in `kept`.
+        With `cascade: false` only the instance
+
+        itself is removed and its children are left in place. Use `get_instance_deletion_preview`
+        to see the sets before
+
+        deleting.'
+      operationId: deleteInstance
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteInstanceBody'
+        required: true
+      responses:
+        '200':
+          description: The instance was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstanceDeletionResult'
+        '400':
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: GraphDB is unreachable or the repository is offline.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/import_coupled_kratos/:
+    post:
+      tags:
+      - semantic
+      summary: Import a Kratos CoSimulation JSON configuration
+      description: 'Recursively converts a Kratos CoSimulation parameters JSON object
+        into OWL instances (CoSim2OWL), infers
+
+        class-restriction axioms for the imported structure, and persists the updated
+        ontology to GraphDB. Runs on
+
+        the in-memory Owlready2 path.'
+      operationId: importCoupledKratos
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportKratosBody'
+        required: true
       responses:
         '201':
           description: Identifier of the created coupled-system instance.
@@ -727,19 +901,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/InstanceId'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /export_coupled_kratos/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/export_coupled_kratos/:
     post:
-      tags: [semantic]
-      operationId: exportCoupledKratos
+      tags:
+      - semantic
       summary: Export a coupled system as Kratos CoSimulation JSON
-      description: |
-        Reconstructs the nested Kratos CoSimulation parameters JSON for a
-        stored coupled-system instance by recursively resolving its properties.
-        Runs on the in-memory Owlready2 path.
+      description: 'Reconstructs the nested Kratos CoSimulation parameters JSON for
+        a stored coupled-system instance by
+
+        recursively resolving its properties. Runs on the in-memory Owlready2 path.'
+      operationId: exportCoupledKratos
       requestBody:
-        $ref: '#/components/requestBodies/CoupledSystemBody'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoupledSystemBody'
+        required: true
       responses:
         '201':
           description: The reconstructed Kratos parameters object.
@@ -748,25 +931,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/KratosParameters'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /create_coupled/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/create_coupled/:
     post:
-      tags: [semantic]
-      operationId: createCoupled
+      tags:
+      - semantic
       summary: Create an empty coupled system
-      description: Creates a new labelled instance of the `coupled_system` class and persists the ontology. Runs on the in-memory Owlready2 path.
+      description: 'Creates a new labelled instance of the `coupled_system` class
+        and persists the ontology. Runs on the
+
+        in-memory Owlready2 path.'
+      operationId: createCoupled
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [label]
-              properties:
-                label:
-                  type: string
-                  description: Label for the new coupled system.
+              $ref: '#/components/schemas/CreateCoupledBody'
+        required: true
       responses:
         '201':
           description: Identifier of the created coupled-system instance.
@@ -775,33 +961,29 @@ paths:
               schema:
                 $ref: '#/components/schemas/InstanceId'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /copy_instance/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/copy_instance/:
     post:
-      tags: [semantic]
-      operationId: copyInstance
+      tags:
+      - semantic
       summary: Copy an instance with its direct properties
-      description: |
-        Creates a structural copy of an instance, optionally attaching it to a
-        parent via the appropriate inverse property and overriding selected
-        property values with `data`. Runs on the in-memory Owlready2 path.
+      description: 'Creates a structural copy of an instance, optionally attaching
+        it to a parent via the appropriate inverse
+
+        property and overriding selected property values with `data`. Runs on the
+        in-memory Owlready2 path.'
+      operationId: copyInstance
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [instance]
-              properties:
-                instance:
-                  type: string
-                  description: Identifier of the instance to copy.
-                parent:
-                  type: string
-                  description: Optional parent instance to attach the copy to.
-                data:
-                  $ref: '#/components/schemas/PropertyDataMap'
+              $ref: '#/components/schemas/CopyInstanceBody'
+        required: true
       responses:
         '201':
           description: Identifier of the created copy.
@@ -810,39 +992,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/InstanceId'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /copy_instance_recursively/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/copy_instance_recursively/:
     post:
-      tags: [semantic]
-      operationId: copyInstanceRecursively
+      tags:
+      - semantic
       summary: Copy an instance and its linked sub-structure
-      description: |
-        Like `copy_instance`, but also recursively copies linked child
-        instances down to `depth` levels (or without limit when `recursive` is
-        `"True"`). Runs on the in-memory Owlready2 path.
+      description: 'Like `copy_instance`, but also recursively copies linked child
+        instances down to `depth` levels (or without
+
+        limit when `recursive` is true). Runs on the in-memory Owlready2 path.'
+      operationId: copyInstanceRecursively
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [instance]
-              properties:
-                instance:
-                  type: string
-                  description: Identifier of the instance to copy.
-                parent:
-                  type: string
-                  description: Optional parent instance to attach the copy to.
-                data:
-                  $ref: '#/components/schemas/PropertyDataMap'
-                depth:
-                  type: [integer, string]
-                  description: Recursion depth (levels of linked instances to copy).
-                  default: 1
-                recursive:
-                  $ref: '#/components/schemas/RecursiveFlag'
+              $ref: '#/components/schemas/CopyInstanceRecursivelyBody'
+        required: true
       responses:
         '201':
           description: Identifier of the created copy.
@@ -851,57 +1022,86 @@ paths:
               schema:
                 $ref: '#/components/schemas/InstanceId'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /infer_coupled_structure/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/infer_coupled_structure/:
     post:
-      tags: [semantic]
-      operationId: inferCoupledStructure
+      tags:
+      - semantic
       summary: Infer class-restriction axioms for a coupled system
-      description: |
-        Runs the class-axiom inference over a coupled system's connected
-        instances (deriving existential and cardinality restrictions from the
-        instance structure) and persists the result. Runs on the in-memory
-        Owlready2 path.
+      description: 'Runs the class-axiom inference over a coupled system''s connected
+        instances (deriving existential and
+
+        cardinality restrictions from the instance structure) and persists the result.
+        Runs on the in-memory
+
+        Owlready2 path.'
+      operationId: inferCoupledStructure
       requestBody:
-        $ref: '#/components/requestBodies/CoupledSystemBody'
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CoupledSystemBody'
+        required: true
       responses:
         '201':
-          $ref: '#/components/responses/EmptyCreated'
+          description: The operation succeeded. The body is an empty JSON string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyBody'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /get_instance_properties_recursively/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_instance_properties_recursively/:
     get:
-      tags: [semantic]
-      operationId: getInstancePropertiesRecursively
+      tags:
+      - semantic
       summary: Get an instance's properties as a nested structure
-      description: |
-        Returns the instance's properties with linked instances expanded
-        in place down to `depth` levels (or without limit when `recursive` is
-        `"True"`). Property names lose the `has_` prefix; single-valued
-        properties are returned as scalars, multi-valued ones as arrays. Runs
-        on the in-memory Owlready2 path.
+      description: 'Returns the instance''s properties with linked instances expanded
+        in place down to `depth` levels (or
+
+        without limit when `recursive` is true). Property names lose the `has_` prefix;
+        single-valued properties are
+
+        returned as scalars, multi-valued ones as arrays. Runs on the in-memory Owlready2
+        path.'
+      operationId: getInstancePropertiesRecursively
       parameters:
-        - name: instance
-          in: query
-          required: true
-          schema:
-            type: string
+      - name: instance
+        in: query
+        required: true
+        schema:
+          type: string
           description: Instance identifier.
-        - name: depth
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 1
+          title: Instance
+        description: Instance identifier.
+      - name: depth
+        in: query
+        required: false
+        schema:
+          type: integer
           description: Recursion depth.
-        - name: recursive
-          in: query
-          required: false
-          schema:
-            $ref: '#/components/schemas/RecursiveFlag'
-          description: Unlimited recursion when `"True"`.
+          default: 1
+          title: Depth
+        description: Recursion depth.
+      - name: recursive
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Unlimited recursion when true.
+          default: false
+          title: Recursive
+        description: Unlimited recursion when true.
       responses:
         '200':
           description: Nested property structure.
@@ -910,26 +1110,42 @@ paths:
               schema:
                 $ref: '#/components/schemas/NestedProperties'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /save_onto/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/save_onto/:
     post:
-      tags: [files]
-      operationId: saveOnto
+      tags:
+      - files
       summary: Persist the in-memory ontology to GraphDB
-      description: Pushes the current in-memory Owlready2 model to the GraphDB named graph.
+      description: Pushes the current in-memory Owlready2 model to the GraphDB named
+        graph.
+      operationId: saveOnto
       responses:
         '201':
-          $ref: '#/components/responses/EmptyCreated'
+          description: The operation succeeded. The body is an empty JSON string.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmptyBody'
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /save_locally/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/save_locally/:
     get:
-      tags: [files]
-      operationId: saveLocally
+      tags:
+      - files
       summary: Download the ontology as an OWL file (inline)
-      description: Reloads the ontology from GraphDB, serialises it to RDF/XML and returns the file.
+      description: Reloads the ontology from GraphDB, serialises it to RDF/XML and
+        returns the file.
+      operationId: saveLocally
       responses:
         '200':
           description: The ontology file.
@@ -938,14 +1154,20 @@ paths:
               schema:
                 type: string
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /download_owl/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/download_owl/:
     get:
-      tags: [files]
-      operationId: downloadOwl
+      tags:
+      - files
       summary: Download the ontology as an OWL file (attachment)
-      description: Reloads the ontology from GraphDB, serialises it to RDF/XML and returns the file as a download attachment.
+      description: Reloads the ontology from GraphDB, serialises it to RDF/XML and
+        returns the file as a download attachment.
+      operationId: downloadOwl
       responses:
         '200':
           description: The ontology file as an attachment.
@@ -954,64 +1176,80 @@ paths:
               schema:
                 type: string
         '500':
-          $ref: '#/components/responses/UnexpectedError'
-
-  /get_class_hierarchy/:
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_class_hierarchy/:
     get:
-      tags: [legacy]
-      operationId: getClassHierarchy
+      tags:
+      - legacy
       summary: Map root classes to their subclasses
-      description: |
-        Returns a mapping from each root class (no named parent) to the list of
-        its direct subclasses. Superseded by `get_class_hierarchy_metadata` for
-        the explorer UI.
+      description: 'Returns a mapping from each root class (no named parent) to the
+        list of its direct subclasses. Superseded by
+
+        `get_class_hierarchy_metadata` for the explorer UI.'
+      operationId: getClassHierarchy
       responses:
         '200':
           description: Root-class to subclasses mapping.
           content:
             application/json:
               schema:
-                type: object
                 additionalProperties:
-                  type: array
                   items:
                     type: string
-              example:
-                coupled_system: []
-                settings: [io_settings_1, solver_settings_1]
+                  type: array
+                type: object
+                title: Response Getclasshierarchy
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /get_class_properties_recursively/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_class_properties_recursively/:
     get:
-      tags: [legacy]
-      operationId: getClassPropertiesRecursively
+      tags:
+      - legacy
       summary: Get a class's restriction axioms as nested structures
-      description: |
-        Returns the class's restriction axioms (property, cardinality, target
-        value) with class-valued targets expanded recursively down to `depth`
-        levels (or without limit when `recursive` is `"True"`). Runs on the
-        in-memory Owlready2 path.
+      description: 'Returns the class''s restriction axioms (property, cardinality,
+        target value) with class-valued targets
+
+        expanded recursively down to `depth` levels (or without limit when `recursive`
+        is true). Runs on the in-memory
+
+        Owlready2 path.'
+      operationId: getClassPropertiesRecursively
       parameters:
-        - name: class
-          in: query
-          required: true
-          schema:
-            type: string
+      - name: class
+        in: query
+        required: true
+        schema:
+          type: string
           description: Class name.
-        - name: depth
-          in: query
-          required: false
-          schema:
-            type: integer
-            default: 1
+          title: Class
+        description: Class name.
+      - name: depth
+        in: query
+        required: false
+        schema:
+          type: integer
           description: Recursion depth.
-        - name: recursive
-          in: query
-          required: false
-          schema:
-            $ref: '#/components/schemas/RecursiveFlag'
-          description: Unlimited recursion when `"True"`.
+          default: 1
+          title: Depth
+        description: Recursion depth.
+      - name: recursive
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Unlimited recursion when true.
+          default: false
+          title: Recursive
+        description: Unlimited recursion when true.
       responses:
         '200':
           description: List of class axioms.
@@ -1021,22 +1259,33 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ClassAxiom'
+                title: Response Getclasspropertiesrecursively
         '400':
-          $ref: '#/components/responses/BadRequest'
-
-  /get_class_instances/:
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /api/v1.0/get_class_instances/:
     get:
-      tags: [legacy]
-      operationId: getClassInstances
+      tags:
+      - legacy
       summary: List instance identifiers of a class
-      description: Returns the identifiers of all instances of the class (including subclass instances). Superseded by `get_class_instance_summaries` for the explorer UI.
+      description: 'Returns the identifiers of all instances of the class (including
+        subclass instances). Superseded by
+
+        `get_class_instance_summaries` for the explorer UI.'
+      operationId: getClassInstances
       parameters:
-        - name: class
-          in: query
-          required: true
-          schema:
-            type: string
+      - name: class
+        in: query
+        required: true
+        schema:
+          type: string
           description: Class name.
+          title: Class
+        description: Class name.
       responses:
         '200':
           description: Instance identifiers.
@@ -1046,512 +1295,984 @@ paths:
                 type: array
                 items:
                   type: string
+                title: Response Getclassinstances
         '400':
-          $ref: '#/components/responses/BadRequest'
-
+          description: Invalid input (missing parameters, unknown subject/class, or
+            validation failure).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
-  requestBodies:
-    InstanceDataBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [instance, data]
-            properties:
-              instance:
-                type: string
-                description: Instance identifier.
-              data:
-                $ref: '#/components/schemas/PropertyDataMap'
-    CoupledSystemBody:
-      required: true
-      content:
-        application/json:
-          schema:
-            type: object
-            required: [coupled_system]
-            properties:
-              coupled_system:
-                type: string
-                description: Identifier of the coupled-system instance.
-
-  responses:
-    EmptyCreated:
-      description: The operation succeeded. The body is an empty JSON string.
-      content:
-        application/json:
-          schema:
-            type: string
-            const: ''
-    BadRequest:
-      description: Invalid input (missing parameters, unknown subject/class, or validation failure).
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    GraphDBUnavailable:
-      description: GraphDB is unreachable or the repository is offline.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-    UnexpectedError:
-      description: Unexpected server error.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-
   schemas:
-    Error:
+    ClassAxiom:
+      properties:
+        property:
+          type: string
+          title: Property
+          description: Restricted property name.
+        cardinality:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Cardinality
+          description: Cardinality bound, when the axiom is a cardinality restriction.
+        value:
+          anyOf:
+          - type: string
+          - items:
+              anyOf:
+              - type: string
+              - additionalProperties: true
+                type: object
+            type: array
+          title: Value
+          description: Target class name, the member class names of an intersection
+            target, or one-key objects mapping a member class to its own axioms when
+            expanded recursively.
+      additionalProperties: false
       type: object
-      required: [error]
+      required:
+      - property
+      - cardinality
+      - value
+      title: ClassAxiom
+    ClassHierarchyEntry:
+      properties:
+        class:
+          type: string
+          title: Class
+          description: Local class name.
+          examples:
+          - convergence_accelerators
+        parents:
+          items:
+            type: string
+          type: array
+          title: Parents
+          description: Direct named superclasses (empty for root classes).
+      additionalProperties: false
+      type: object
+      required:
+      - class
+      - parents
+      title: ClassHierarchyEntry
+    ClassMetadata:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Local class name.
+        label:
+          type: string
+          title: Label
+          description: Class label (currently identical to the local name).
+        descriptions:
+          items:
+            type: string
+          type: array
+          title: Descriptions
+          description: '`rdfs:comment` and `skos:definition` annotations.'
+        superclasses:
+          items:
+            $ref: '#/components/schemas/NamedReference'
+          type: array
+          title: Superclasses
+        subclasses:
+          items:
+            $ref: '#/components/schemas/NamedReference'
+          type: array
+          title: Subclasses
+        restrictions:
+          items:
+            $ref: '#/components/schemas/Restriction'
+          type: array
+          title: Restrictions
+          description: Asserted OWL restriction axioms, sorted by property label.
+        equivalent_classes:
+          items:
+            $ref: '#/components/schemas/NamedReference'
+          type: array
+          title: Equivalent Classes
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - label
+      - descriptions
+      - superclasses
+      - subclasses
+      - restrictions
+      - equivalent_classes
+      title: ClassMetadata
+    CopyInstanceBody:
+      properties:
+        instance:
+          type: string
+          title: Instance
+          description: Identifier of the instance to copy.
+        parent:
+          type: string
+          title: Parent
+          description: Optional parent instance to attach the copy to.
+        data:
+          $ref: '#/components/schemas/PropertyDataMap'
+          title: Data
+      type: object
+      required:
+      - instance
+      title: CopyInstanceBody
+    CopyInstanceRecursivelyBody:
+      properties:
+        instance:
+          type: string
+          title: Instance
+          description: Identifier of the instance to copy.
+        parent:
+          type: string
+          title: Parent
+          description: Optional parent instance to attach the copy to.
+        data:
+          $ref: '#/components/schemas/PropertyDataMap'
+          title: Data
+        depth:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Depth
+          description: Recursion depth (levels of linked instances to copy); null
+            for no limit.
+          default: 1
+        recursive:
+          type: boolean
+          title: Recursive
+          description: Unlimited recursion when true.
+          default: false
+      type: object
+      required:
+      - instance
+      title: CopyInstanceRecursivelyBody
+    CoupledSystemBody:
+      properties:
+        coupled_system:
+          type: string
+          title: Coupled System
+          description: Identifier of the coupled-system instance.
+      type: object
+      required:
+      - coupled_system
+      title: CoupledSystemBody
+    CreateClassInstanceBody:
+      properties:
+        class:
+          type: string
+          title: Class
+          description: Class to instantiate.
+          examples:
+          - solvers
+        label:
+          type: string
+          title: Label
+          description: Human-readable label stored as `rdfs:label`.
+          examples:
+          - Airfoil fluid solver
+      type: object
+      required:
+      - class
+      - label
+      title: CreateClassInstanceBody
+    CreateCoupledBody:
+      properties:
+        label:
+          type: string
+          title: Label
+          description: Label for the new coupled system.
+      type: object
+      required:
+      - label
+      title: CreateCoupledBody
+    CreateInstanceBody:
+      properties:
+        property:
+          type: string
+          title: Property
+          description: Class name of the new instance (also selects the `has_*` linking
+            property).
+          examples:
+          - solvers
+        parent:
+          type: string
+          title: Parent
+          description: Identifier of the existing parent instance.
+        data:
+          $ref: '#/components/schemas/PropertyDataMap'
+          title: Data
+      type: object
+      required:
+      - property
+      - parent
+      title: CreateInstanceBody
+    DeleteInstanceBody:
+      properties:
+        instance:
+          type: string
+          title: Instance
+          description: Identifier of the instance to delete.
+        cascade:
+          type: boolean
+          title: Cascade
+          description: Also delete the instance's owned subtree.
+          default: true
+      type: object
+      required:
+      - instance
+      title: DeleteInstanceBody
+    DeleteValueBody:
+      properties:
+        instance:
+          type: string
+          title: Instance
+          description: Instance identifier.
+        property:
+          type: string
+          title: Property
+          description: Property name (without the `has_` prefix).
+          examples:
+          - parallel_type
+        value:
+          anyOf:
+          - oneOf:
+            - $ref: '#/components/schemas/ObjectValueTarget'
+            - $ref: '#/components/schemas/LiteralValueTarget'
+            discriminator:
+              propertyName: kind
+              mapping:
+                literal: '#/components/schemas/LiteralValueTarget'
+                object: '#/components/schemas/ObjectValueTarget'
+          - $ref: '#/components/schemas/ScalarValue'
+          title: Value
+          description: The value to delete. The typed forms delete the exact triple
+            (correct datatype serialization); a bare scalar is matched by serialization
+            guess.
+        cascade:
+          type: boolean
+          title: Cascade
+          description: Also delete the unlinked instance's owned subtree when nothing
+            else reaches it.
+          default: true
+      type: object
+      required:
+      - instance
+      - property
+      - value
+      title: DeleteValueBody
+    DeleteValuesBody:
+      properties:
+        instance:
+          type: string
+          title: Instance
+          description: Instance identifier.
+        properties:
+          items:
+            type: string
+          type: array
+          title: Properties
+          description: Property names whose values are removed (without the `has_`
+            prefix).
+          examples:
+          - - echo_level
+            - parallel_type
+      type: object
+      required:
+      - instance
+      - properties
+      title: DeleteValuesBody
+    DeletionPreview:
+      properties:
+        deleted:
+          items:
+            type: string
+          type: array
+          title: Deleted
+          description: Identifiers the deletion removes, the root of the collected
+            subtree first; empty when nothing is collected.
+        kept:
+          items:
+            type: string
+          type: array
+          title: Kept
+          description: Reachable instances kept because they are still reachable from
+            outside the collected subtree (an instance linked from elsewhere, or a
+            coupled system, plus everything below it).
+        instance:
+          type: string
+          title: Instance
+          description: Identifier of the instance the deletion applies to.
+        unlinked_from:
+          items:
+            type: string
+          type: array
+          title: Unlinked From
+          description: Surviving instances whose link to the deleted instance is removed.
+      additionalProperties: false
+      type: object
+      required:
+      - deleted
+      - kept
+      - instance
+      - unlinked_from
+      title: DeletionPreview
+    EmptyBody:
+      type: string
+      const: ''
+      description: The operation succeeded. The body is an empty JSON string.
+    Error:
       properties:
         error:
           type: string
+          title: Error
           description: Human-readable error message.
-
-    DeletionSets:
       type: object
-      description: What a deletion removes and what it leaves in place.
-      required: [deleted, kept]
-      properties:
-        deleted:
-          type: array
-          description: Identifiers the deletion removes, the root of the collected subtree first; empty when nothing is collected.
-          items:
-            type: string
-        kept:
-          type: array
-          description: Reachable instances kept because they are still reachable from outside the collected subtree (an instance linked from elsewhere, or a coupled system, plus everything below it).
-          items:
-            type: string
-
-    DeletionPreview:
-      allOf:
-        - $ref: '#/components/schemas/DeletionSets'
-        - type: object
-          required: [instance, unlinked_from]
-          properties:
-            instance:
-              type: string
-              description: Identifier of the instance the deletion applies to.
-            unlinked_from:
-              type: array
-              description: Surviving instances whose link to the deleted instance is removed.
-              items:
-                type: string
-
-    UnlinkResult:
-      allOf:
-        - $ref: '#/components/schemas/DeletionSets'
-        - type: object
-          required: [target]
-          properties:
-            target:
-              type: [string, 'null']
-              description: >
-                The unlinked instance, or null when the value was a literal. It appears in
-                `deleted` when collected, in `kept` when it survives (still linked from
-                elsewhere, a coupled system, the link holder itself, `cascade` off, or the
-                link was not stored), and in neither when it is not an individual (a
-                dangling reference or a class). The instance holding the link is never
-                collected; it is listed in `kept` when the target is collected and a link
-                below the target leads back to it.
-
-    HealthOk:
-      type: object
-      required: [status, graphdb, repository]
-      properties:
-        status:
-          type: string
-          const: ok
-        graphdb:
-          type: string
-          const: connected
-        repository:
-          type: string
-          description: Name of the configured GraphDB repository.
-          example: coupled_modelling
-
+      required:
+      - error
+      title: Error
     HealthError:
-      type: object
-      required: [status, graphdb, repository, error]
       properties:
         status:
           type: string
           const: error
+          title: Status
         graphdb:
           type: string
           const: unavailable
+          title: Graphdb
         repository:
           type: string
+          title: Repository
           description: Name of the configured GraphDB repository.
         error:
           type: string
+          title: Error
           description: Underlying connection error message.
-
-    InstanceId:
-      type: string
-      description: Local identifier of an instance (UUID-based for instances created through the API).
-      example: instance_550e8400-e29b-41d4-a716-446655440000
-
-    ScalarValue:
-      description: A literal value (string, number or boolean).
-      type: [string, number, boolean]
-
-    PropertyDataMap:
+      additionalProperties: false
       type: object
-      description: |
-        Property-name to value(s) mapping. Keys are property names without the
-        `has_` prefix (plus `label` for `rdfs:label`). Values are scalars or
-        arrays of scalars. Whether plain strings on object properties are
-        label-resolved to object references is documented per endpoint; the
-        replace endpoints accept only non-string literals (numbers, booleans),
-        `label` strings, and explicit `instance*` references.
-      additionalProperties:
-        oneOf:
-          - $ref: '#/components/schemas/ScalarValue'
-          - type: array
-            items:
-              $ref: '#/components/schemas/ScalarValue'
-      example:
-        echo_level: 1
-        print_colors: false
-
-    RecursiveFlag:
-      type: string
-      enum: ['True', 'False']
-      default: 'False'
-      description: String-encoded boolean; recursion is unlimited when `"True"` is sent (case-insensitive true/false, 1/0, yes/no and on/off are accepted as well).
-
-    ClassHierarchyEntry:
-      type: object
-      required: [class, parents]
+      required:
+      - status
+      - graphdb
+      - repository
+      - error
+      title: HealthError
+    HealthOk:
       properties:
-        class:
+        status:
           type: string
-          description: Local class name.
-          example: convergence_accelerators
-        parents:
-          type: array
-          description: Direct named superclasses (empty for root classes).
+          const: ok
+          title: Status
+        graphdb:
+          type: string
+          const: connected
+          title: Graphdb
+        repository:
+          type: string
+          title: Repository
+          description: Name of the configured GraphDB repository.
+          examples:
+          - coupled_modelling
+      additionalProperties: false
+      type: object
+      required:
+      - status
+      - graphdb
+      - repository
+      title: HealthOk
+    ImportKratosBody:
+      properties:
+        data:
+          $ref: '#/components/schemas/KratosParameters'
+        label:
+          type: string
+          title: Label
+          description: Label for the imported coupled system.
+          examples:
+          - FSI Mok benchmark
+      type: object
+      required:
+      - data
+      - label
+      title: ImportKratosBody
+    InstanceDataBody:
+      properties:
+        instance:
+          type: string
+          title: Instance
+          description: Instance identifier.
+        data:
+          $ref: '#/components/schemas/PropertyDataMap'
+      type: object
+      required:
+      - instance
+      - data
+      title: InstanceDataBody
+    InstanceDeletionResult:
+      properties:
+        deleted:
           items:
             type: string
-
-    PreviewItem:
+          type: array
+          title: Deleted
+          description: Identifiers the deletion removes, the root of the collected
+            subtree first; empty when nothing is collected.
+        kept:
+          items:
+            type: string
+          type: array
+          title: Kept
+          description: Reachable instances kept because they are still reachable from
+            outside the collected subtree (an instance linked from elsewhere, or a
+            coupled system, plus everything below it).
+        instance:
+          type: string
+          title: Instance
+          description: Identifier of the instance the deletion applies to.
+        unlinked_from:
+          items:
+            type: string
+          type: array
+          title: Unlinked From
+          description: Surviving instances whose link to the deleted instance is removed.
+        status:
+          type: string
+          const: success
+          title: Status
+      additionalProperties: false
       type: object
-      required: [property, value, kind]
+      required:
+      - deleted
+      - kept
+      - instance
+      - unlinked_from
+      - status
+      title: InstanceDeletionResult
+    InstanceId:
+      type: string
+      description: Local identifier of an instance (UUID-based for instances created
+        through the API).
+      examples:
+      - instance_550e8400-e29b-41d4-a716-446655440000
+    InstanceMetadata:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Local instance identifier.
+        label:
+          type: string
+          title: Label
+          description: Preferred label, falling back to the identifier.
+        types:
+          items:
+            type: string
+          type: array
+          title: Types
+          description: Project-local class names of the instance.
+        properties:
+          items:
+            $ref: '#/components/schemas/InstancePropertyGroup'
+          type: array
+          title: Properties
+          description: Direct properties, sorted by property name.
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - label
+      - types
+      - properties
+      title: InstanceMetadata
+    InstancePropertyGroup:
       properties:
         property:
           type: string
+          title: Property
+          description: Property name without the `has_` prefix.
+        values:
+          items:
+            oneOf:
+            - $ref: '#/components/schemas/ObjectPropertyValue'
+            - $ref: '#/components/schemas/LiteralPropertyValue'
+            discriminator:
+              propertyName: kind
+              mapping:
+                literal: '#/components/schemas/LiteralPropertyValue'
+                object: '#/components/schemas/ObjectPropertyValue'
+          type: array
+          title: Values
+      additionalProperties: false
+      type: object
+      required:
+      - property
+      - values
+      title: InstancePropertyGroup
+    InstanceSummary:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Local instance identifier.
+        label:
+          type: string
+          title: Label
+          description: Preferred label (English first), falling back to the identifier.
+        types:
+          items:
+            type: string
+          type: array
+          title: Types
+          description: Direct class names of the instance.
+        property_preview:
+          items:
+            $ref: '#/components/schemas/PreviewItem'
+          type: array
+          title: Property Preview
+          description: Up to three property values for compact display (literals first).
+        preview_truncated:
+          type: boolean
+          title: Preview Truncated
+          description: True when the instance has more values than shown in the preview.
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - label
+      - types
+      - property_preview
+      - preview_truncated
+      title: InstanceSummary
+    KratosParameters:
+      additionalProperties: true
+      type: object
+      description: Kratos CoSimulation parameters JSON (nested solver, coupling and
+        data-transfer configuration).
+    LiteralPropertyValue:
+      properties:
+        kind:
+          type: string
+          const: literal
+          title: Kind
+        value:
+          $ref: '#/components/schemas/ScalarValue'
+        datatype:
+          type: string
+          title: Datatype
+          description: XSD datatype IRI of the literal.
+          examples:
+          - http://www.w3.org/2001/XMLSchema#integer
+        language:
+          type: string
+          title: Language
+          description: Language tag, when present on the literal.
+      additionalProperties: false
+      type: object
+      required:
+      - kind
+      - value
+      - datatype
+      title: LiteralPropertyValue
+    LiteralValueTarget:
+      properties:
+        kind:
+          type: string
+          const: literal
+          title: Kind
+        value:
+          $ref: '#/components/schemas/ScalarValue'
+        datatype:
+          type: string
+          title: Datatype
+          description: XSD datatype IRI of the literal (defaults to plain string serialization).
+          examples:
+          - http://www.w3.org/2001/XMLSchema#integer
+        language:
+          type: string
+          title: Language
+          description: Language tag of the literal, required to match language-tagged
+            triples ("value"@de).
+          examples:
+          - de
+      type: object
+      required:
+      - kind
+      - value
+      title: LiteralValueTarget
+      description: Targets a literal triple; the datatype and language tag drive term
+        serialization.
+    NamedReference:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Local name of the referenced entity.
+        label:
+          type: string
+          title: Label
+          description: Preferred label, falling back to the local name.
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - label
+      title: NamedReference
+    NestedProperties:
+      additionalProperties: true
+      type: object
+      description: 'Recursive property structure: keys are property names (without
+        the `has_` prefix), values are scalars, arrays, or one-key objects mapping
+        a linked instance''s identifier to its own nested properties.'
+      examples:
+      - label: FSI Mok benchmark
+        problem_data:
+          problem_data_1:
+            echo_level: 1
+            parallel_type: OpenMP
+    ObjectPropertyValue:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Local instance identifier.
+        label:
+          type: string
+          title: Label
+          description: Preferred label (English first), falling back to the identifier.
+        types:
+          items:
+            type: string
+          type: array
+          title: Types
+          description: Direct class names of the instance.
+        property_preview:
+          items:
+            $ref: '#/components/schemas/PreviewItem'
+          type: array
+          title: Property Preview
+          description: Up to three property values for compact display (literals first).
+        preview_truncated:
+          type: boolean
+          title: Preview Truncated
+          description: True when the instance has more values than shown in the preview.
+        kind:
+          type: string
+          const: object
+          title: Kind
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - label
+      - types
+      - property_preview
+      - preview_truncated
+      - kind
+      title: ObjectPropertyValue
+      description: 'A linked instance: the summary shape plus the value kind.'
+    ObjectValueTarget:
+      properties:
+        kind:
+          type: string
+          const: object
+          title: Kind
+        id:
+          type: string
+          title: Id
+          description: Identifier of the linked instance the triple points at.
+      type: object
+      required:
+      - kind
+      - id
+      title: ObjectValueTarget
+      description: Targets an object-property triple pointing at the referenced instance.
+    PreviewItem:
+      properties:
+        property:
+          type: string
+          title: Property
           description: Property name.
         value:
           $ref: '#/components/schemas/ScalarValue'
         kind:
           type: string
-          enum: [literal, object]
-          description: Whether the value is a typed literal or the resolved label of a linked instance.
-
-    SearchResults:
+          enum:
+          - literal
+          - object
+          title: Kind
+          description: Whether the value is a typed literal or the resolved label
+            of a linked instance.
+      additionalProperties: false
       type: object
-      required: [classes, instances]
-      properties:
-        classes:
+      required:
+      - property
+      - value
+      - kind
+      title: PreviewItem
+    PropertyDataMap:
+      additionalProperties:
+        anyOf:
+        - $ref: '#/components/schemas/ScalarValue'
+        - items:
+            $ref: '#/components/schemas/ScalarValue'
           type: array
-          description: Matching classes (empty when `type=instance`).
-          items:
-            $ref: '#/components/schemas/SearchClassResult'
-        instances:
-          type: array
-          description: Matching instances (empty when `type=class`).
-          items:
-            $ref: '#/components/schemas/InstanceSummary'
-
-    SearchClassResult:
       type: object
-      required: [id]
+      description: Property-name to value(s) mapping. Keys are property names without
+        the `has_` prefix (plus `label` for `rdfs:label`). Values are scalars or arrays
+        of scalars. Whether plain strings on object properties are label-resolved
+        to object references is documented per endpoint; the replace endpoints accept
+        only non-string literals (numbers, booleans), `label` strings, and explicit
+        `instance*` references.
+      examples:
+      - echo_level: 1
+        print_colors: false
+    ReplaceValueBody:
       properties:
-        id:
+        instance:
           type: string
-          description: Local class name.
-
-    InstanceSummary:
-      type: object
-      required: [id, label, types, property_preview, preview_truncated]
-      properties:
-        id:
-          type: string
-          description: Local instance identifier.
-        label:
-          type: string
-          description: Preferred label (English first), falling back to the identifier.
-        types:
-          type: array
-          description: Direct class names of the instance.
-          items:
-            type: string
-        property_preview:
-          type: array
-          description: Up to three property values for compact display (literals first).
-          items:
-            $ref: '#/components/schemas/PreviewItem'
-        preview_truncated:
-          type: boolean
-          description: True when the instance has more values than shown in the preview.
-
-    NamedReference:
-      type: object
-      required: [id, label]
-      properties:
-        id:
-          type: string
-          description: Local name of the referenced entity.
-        label:
-          type: string
-          description: Preferred label, falling back to the local name.
-
-    ObjectValueTarget:
-      type: object
-      description: Targets an object-property triple pointing at the referenced instance.
-      required: [kind, id]
-      properties:
-        kind:
-          type: string
-          const: object
-        id:
-          type: string
-          description: Identifier of the linked instance the triple points at.
-
-    LiteralValueTarget:
-      type: object
-      description: Targets a literal triple; the datatype and language tag drive term serialization.
-      required: [kind, value]
-      properties:
-        kind:
-          type: string
-          const: literal
-        value:
-          $ref: '#/components/schemas/ScalarValue'
-        datatype:
-          type: string
-          description: XSD datatype IRI of the literal (defaults to plain string serialization).
-          example: http://www.w3.org/2001/XMLSchema#integer
-        language:
-          type: string
-          description: Language tag of the literal — required to match language-tagged triples ("value"@de).
-          example: de
-
-    ObjectPropertyValue:
-      type: object
-      required: [kind, id, label, types, property_preview, preview_truncated]
-      properties:
-        kind:
-          type: string
-          const: object
-        id:
-          type: string
-          description: Identifier of the linked instance.
-        label:
-          type: string
-          description: Preferred label of the linked instance (falls back to the id when unlabeled).
-        types:
-          type: array
-          items:
-            type: string
-          description: Local class names of the linked instance.
-        property_preview:
-          type: array
-          items:
-            $ref: '#/components/schemas/PreviewItem'
-          description: Up to three of the linked instance's property values, literals first.
-        preview_truncated:
-          type: boolean
-          description: Whether the linked instance has more property values than the preview shows.
-
-    LiteralPropertyValue:
-      type: object
-      required: [kind, value, datatype]
-      properties:
-        kind:
-          type: string
-          const: literal
-        value:
-          $ref: '#/components/schemas/ScalarValue'
-        datatype:
-          type: string
-          description: XSD datatype IRI of the literal.
-          example: http://www.w3.org/2001/XMLSchema#integer
-        language:
-          type: string
-          description: Language tag, when present on the literal.
-
-    InstancePropertyGroup:
-      type: object
-      required: [property, values]
-      properties:
+          title: Instance
+          description: Instance identifier.
         property:
           type: string
-          description: Property name without the `has_` prefix.
-        values:
-          type: array
-          items:
-            oneOf:
-              - $ref: '#/components/schemas/ObjectPropertyValue'
-              - $ref: '#/components/schemas/LiteralPropertyValue'
-            discriminator:
-              propertyName: kind
-              # Explicit mapping keeps generators (openapi-typescript) emitting the runtime
-              # values "object"/"literal" instead of substituting the schema names.
-              mapping:
-                object: '#/components/schemas/ObjectPropertyValue'
-                literal: '#/components/schemas/LiteralPropertyValue'
-
-    InstanceMetadata:
+          title: Property
+          description: Property name (without the `has_` prefix).
+        old_value:
+          oneOf:
+          - $ref: '#/components/schemas/ObjectValueTarget'
+          - $ref: '#/components/schemas/LiteralValueTarget'
+          title: Old Value
+          description: The currently stored value to replace.
+          discriminator:
+            propertyName: kind
+            mapping:
+              literal: '#/components/schemas/LiteralValueTarget'
+              object: '#/components/schemas/ObjectValueTarget'
+        new_value:
+          oneOf:
+          - $ref: '#/components/schemas/ObjectValueTarget'
+          - $ref: '#/components/schemas/LiteralValueTarget'
+          title: New Value
+          description: The replacement value.
+          discriminator:
+            propertyName: kind
+            mapping:
+              literal: '#/components/schemas/LiteralValueTarget'
+              object: '#/components/schemas/ObjectValueTarget'
       type: object
-      required: [id, label, types, properties]
-      properties:
-        id:
-          type: string
-          description: Local instance identifier.
-        label:
-          type: string
-          description: Preferred label, falling back to the identifier.
-        types:
-          type: array
-          description: Project-local class names of the instance.
-          items:
-            type: string
-        properties:
-          type: array
-          description: Direct properties, sorted by property name.
-          items:
-            $ref: '#/components/schemas/InstancePropertyGroup'
-
-    RestrictionTarget:
-      type: object
-      required: [id, label]
-      properties:
-        id:
-          type: string
-          description: Local name of the target class, or the raw value for literal targets.
-        label:
-          type: string
-          description: Display label ("A & B" for intersections, "Anonymous Class (id)" for unresolved blank nodes).
-        value:
-          $ref: '#/components/schemas/ScalarValue'
-        datatype:
-          type: string
-          description: XSD datatype IRI (literal targets only).
-        language:
-          type: string
-          description: Language tag (literal targets only).
-        members:
-          type: array
-          description: Named member classes (intersection targets only).
-          items:
-            $ref: '#/components/schemas/NamedReference'
-
+      required:
+      - instance
+      - property
+      - old_value
+      - new_value
+      title: ReplaceValueBody
     Restriction:
-      type: object
-      required: [property, kind]
       properties:
         property:
           $ref: '#/components/schemas/NamedReference'
         kind:
           type: string
           enum:
-            - some_values_from
-            - all_values_from
-            - has_value
-            - cardinality
-            - min_cardinality
-            - max_cardinality
-            - qualified_cardinality
-            - min_qualified_cardinality
-            - max_qualified_cardinality
+          - some_values_from
+          - all_values_from
+          - has_value
+          - cardinality
+          - min_cardinality
+          - max_cardinality
+          - qualified_cardinality
+          - min_qualified_cardinality
+          - max_qualified_cardinality
+          title: Kind
           description: Type of OWL restriction.
         cardinality:
-          type: [integer, string]
+          anyOf:
+          - type: integer
+          - type: string
+          title: Cardinality
           description: Cardinality bound (cardinality restrictions only).
         target_kind:
           type: string
-          enum: [class, literal, bnode, intersection, data_range]
+          enum:
+          - class
+          - literal
+          - bnode
+          - intersection
+          - data_range
+          title: Target Kind
           description: Nature of the restriction target.
         target:
           $ref: '#/components/schemas/RestrictionTarget'
-
-    ClassMetadata:
+      additionalProperties: false
       type: object
-      required: [id, label, descriptions, superclasses, subclasses, restrictions, equivalent_classes]
+      required:
+      - property
+      - kind
+      title: Restriction
+    RestrictionTarget:
       properties:
         id:
           type: string
-          description: Local class name.
+          title: Id
+          description: Local name of the target class, or the raw value for literal
+            targets.
         label:
           type: string
-          description: Class label (currently identical to the local name).
-        descriptions:
+          title: Label
+          description: Display label ("A & B" for intersections, "Anonymous Class
+            (id)" for unresolved blank nodes).
+        value:
+          $ref: '#/components/schemas/ScalarValue'
+        datatype:
+          type: string
+          title: Datatype
+          description: XSD datatype IRI (literal targets only).
+        language:
+          type: string
+          title: Language
+          description: Language tag (literal targets only).
+        members:
+          items:
+            $ref: '#/components/schemas/NamedReference'
           type: array
-          description: '`rdfs:comment` and `skos:definition` annotations.'
+          title: Members
+          description: Named member classes (intersection targets only).
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      - label
+      title: RestrictionTarget
+    ScalarValue:
+      anyOf:
+      - type: string
+      - type: integer
+      - type: number
+      - type: boolean
+      description: A literal value (string, number or boolean).
+    SearchClassResult:
+      properties:
+        id:
+          type: string
+          title: Id
+          description: Local class name.
+      additionalProperties: false
+      type: object
+      required:
+      - id
+      title: SearchClassResult
+    SearchResults:
+      properties:
+        classes:
+          items:
+            $ref: '#/components/schemas/SearchClassResult'
+          type: array
+          title: Classes
+          description: Matching classes (empty when `type=instance`).
+        instances:
+          items:
+            $ref: '#/components/schemas/InstanceSummary'
+          type: array
+          title: Instances
+          description: Matching instances (empty when `type=class`).
+      additionalProperties: false
+      type: object
+      required:
+      - classes
+      - instances
+      title: SearchResults
+    UnlinkResult:
+      properties:
+        deleted:
           items:
             type: string
-        superclasses:
           type: array
+          title: Deleted
+          description: Identifiers the deletion removes, the root of the collected
+            subtree first; empty when nothing is collected.
+        kept:
           items:
-            $ref: '#/components/schemas/NamedReference'
-        subclasses:
+            type: string
           type: array
-          items:
-            $ref: '#/components/schemas/NamedReference'
-        restrictions:
-          type: array
-          description: Asserted OWL restriction axioms, sorted by property label.
-          items:
-            $ref: '#/components/schemas/Restriction'
-        equivalent_classes:
-          type: array
-          items:
-            $ref: '#/components/schemas/NamedReference'
-
-    ClassAxiom:
+          title: Kept
+          description: Reachable instances kept because they are still reachable from
+            outside the collected subtree (an instance linked from elsewhere, or a
+            coupled system, plus everything below it).
+        target:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target
+          description: The unlinked instance, or null when the value was a literal.
+            It appears in `deleted` when collected, in `kept` when it survives (still
+            linked from elsewhere, a coupled system, the link holder itself, `cascade`
+            off, or the link was not stored), and in neither when it is not an individual
+            (a dangling reference or a class). The instance holding the link is never
+            collected; it is listed in `kept` when the target is collected and a link
+            below the target leads back to it.
+      additionalProperties: false
       type: object
-      required: [property, cardinality, value]
+      required:
+      - deleted
+      - kept
+      - target
+      title: UnlinkResult
+    ValueDeletionResult:
       properties:
-        property:
+        deleted:
+          items:
+            type: string
+          type: array
+          title: Deleted
+          description: Identifiers the deletion removes, the root of the collected
+            subtree first; empty when nothing is collected.
+        kept:
+          items:
+            type: string
+          type: array
+          title: Kept
+          description: Reachable instances kept because they are still reachable from
+            outside the collected subtree (an instance linked from elsewhere, or a
+            coupled system, plus everything below it).
+        target:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target
+          description: The unlinked instance, or null when the value was a literal.
+            It appears in `deleted` when collected, in `kept` when it survives (still
+            linked from elsewhere, a coupled system, the link holder itself, `cascade`
+            off, or the link was not stored), and in neither when it is not an individual
+            (a dangling reference or a class). The instance holding the link is never
+            collected; it is listed in `kept` when the target is collected and a link
+            below the target leads back to it.
+        status:
           type: string
-          description: Restricted property name.
-        cardinality:
-          type: [integer, 'null']
-          description: Cardinality bound, when the axiom is a cardinality restriction.
-        value:
-          description: Target class name(s); nested axiom objects when expanded recursively.
-          oneOf:
-            - type: string
-            - type: array
-              items:
-                type: object
-                additionalProperties:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/ClassAxiom'
-
-    NestedProperties:
+          const: success
+          title: Status
+      additionalProperties: false
       type: object
-      description: |
-        Recursive property structure: keys are property names (without the
-        `has_` prefix), values are scalars, arrays, or one-key objects mapping
-        a linked instance's identifier to its own nested properties.
-      additionalProperties: true
-      example:
-        label: FSI Mok benchmark
-        problem_data:
-          problem_data_1:
-            parallel_type: OpenMP
-            echo_level: 1
-
-    KratosParameters:
-      type: object
-      description: Kratos CoSimulation parameters JSON (nested solver, coupling and data-transfer configuration).
-      additionalProperties: true
+      required:
+      - deleted
+      - kept
+      - target
+      - status
+      title: ValueDeletionResult
+tags:
+- name: system
+  description: Health and connection status.
+- name: explorer
+  description: Read-only metadata endpoints backing the web explorer (direct SPARQL).
+- name: mutations
+  description: Stateless create/update/delete operations executed as direct SPARQL
+    updates.
+- name: semantic
+  description: Owlready2 in-memory workflows (Kratos import/export, copying, inference).
+- name: files
+  description: Ontology file downloads and persistence.
+- name: legacy
+  description: Early read endpoints kept for compatibility; the explorer endpoints
+    supersede them.

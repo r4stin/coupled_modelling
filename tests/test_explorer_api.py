@@ -95,7 +95,7 @@ class TestExplorerApi(unittest.TestCase):
     @patch('api.get_class_instance_summaries')
     def test_get_class_instance_summaries_optional_class(self, mock_helper):
         """Verify get_class_instance_summaries succeeds with 200 when class param is omitted (global search)."""
-        mock_helper.return_value = [{"id": "instance_1", "label": "GlobalInst", "types": ["solver"]}]
+        mock_helper.return_value = [{"id": "instance_1", "label": "GlobalInst", "types": ["solver"], "property_preview": [], "preview_truncated": False}]
         response = self.app.get('/api/v1.0/get_class_instance_summaries/')
         self.assertEqual(response.status_code, 200)
         mock_helper.assert_called_with(None)
@@ -435,7 +435,7 @@ class TestExplorerApi(unittest.TestCase):
         response = self.app.get('/api/v1.0/get_class_metadata/')
         self.assertEqual(response.status_code, 400)
         data = response.json()
-        self.assertIn("Missing required query parameter", data["error"])
+        self.assertIn("class", data["error"])
 
     @patch('main.query_graphdb')
     @patch('main.validate_class_exists_in_graphdb')
@@ -613,13 +613,13 @@ class TestSearch(unittest.TestCase):
         mock_search.assert_called_once_with('mok', 'instance', 5)
 
     @patch('api.search_entities')
-    def test_search_route_defaults_empty_limit(self, mock_search):
-        """Verify an empty limit parameter falls back to the default instead of erroring."""
-        from main import SEARCH_RESULT_LIMIT
+    def test_search_route_rejects_empty_limit(self, mock_search):
+        """An empty limit is not a number: 400 naming the parameter, the search never runs."""
         mock_search.return_value = {"classes": [], "instances": []}
         response = self.app.get('/api/v1.0/search/?q=mok&limit=')
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(mock_search.call_args[0][2], SEARCH_RESULT_LIMIT)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("limit", response.json()["error"])
+        mock_search.assert_not_called()
 
     def test_search_rejects_invalid_type_and_limit(self):
         """Verify out-of-contract type, limit, and text values raise ValueError."""
