@@ -786,29 +786,6 @@ def get_class_instances(class_name):
         return []
 
 
-def get_values(subj, prop):
-    """
-    Returns a property for the given subject .
-
-    Args:
-        subj (str): A name of the instance that is the subject of the statement.
-        prop (str): Label of the property.
-
-    Returns:
-        The value.
-    """
-    subj = onto[subj]
-    prop = onto[f'has_{prop}']
-    values = prop[subj]
-    res = []
-    for value in values:
-        if hasattr(value, 'name'):
-            res.append(value.name)
-        else:
-            res.append(value)
-    return res
-
-    
 def serialize_subject(subj):
     if isinstance(subj, str) and (subj.startswith("http://") or subj.startswith("https://")):
         if any(char in subj for char in '<>"\' {}^`\n\r\t'):

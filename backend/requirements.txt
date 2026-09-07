@@ -1,2 +1,5 @@
-Flask==3.1.1
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
 owlready2==0.47
+# Test client transport (fastapi.testclient).
+httpx==0.28.1

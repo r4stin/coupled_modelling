@@ -2,9 +2,12 @@ import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../backend')))
 
+import importlib
 import unittest
+from unittest.mock import patch
 
 import api
+from fastapi.testclient import TestClient
 from api import app
 
 # A real, GraphDB-independent GET route: CORS headers must appear on actual API responses.
@@ -15,15 +18,12 @@ class TestCorsHeaders(unittest.TestCase):
     """CORS headers for the separate Next.js frontend (offline — no GraphDB needed)."""
 
     def setUp(self):
-        self.client = app.test_client()
+        self.client = TestClient(app)
         self.allowed_origin = 'http://localhost:3000'
 
     def test_allowed_origin_gets_cors_headers(self):
         res = self.client.get(SPEC_ROUTE, headers={'Origin': self.allowed_origin})
         self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), self.allowed_origin)
-        self.assertIn('GET', res.headers.get('Access-Control-Allow-Methods', ''))
-        self.assertIn('POST', res.headers.get('Access-Control-Allow-Methods', ''))
-        self.assertEqual(res.headers.get('Access-Control-Allow-Headers'), 'Content-Type')
         self.assertIn('Origin', res.headers.get('Vary', ''))
 
     def test_preflight_options_gets_cors_headers(self):
@@ -36,6 +36,9 @@ class TestCorsHeaders(unittest.TestCase):
             })
         self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), self.allowed_origin)
         self.assertEqual(res.headers.get('Access-Control-Max-Age'), '86400')
+        self.assertIn('GET', res.headers.get('Access-Control-Allow-Methods', ''))
+        self.assertIn('POST', res.headers.get('Access-Control-Allow-Methods', ''))
+        self.assertIn('Content-Type', res.headers.get('Access-Control-Allow-Headers', ''))
 
     def test_disallowed_origin_gets_no_cors_headers(self):
         res = self.client.get(SPEC_ROUTE, headers={'Origin': 'http://evil.example.com'})
@@ -46,15 +49,17 @@ class TestCorsHeaders(unittest.TestCase):
         self.assertIsNone(res.headers.get('Access-Control-Allow-Origin'))
 
     def test_allowed_origins_configurable(self):
-        original = api.CORS_ALLOWED_ORIGINS
+        """The origin list is read from the environment when the app is built."""
         try:
-            api.CORS_ALLOWED_ORIGINS = ['https://kb.example.org']
-            res = self.client.get(SPEC_ROUTE, headers={'Origin': 'https://kb.example.org'})
+            with patch.dict(os.environ, {'CORS_ALLOWED_ORIGINS': 'https://kb.example.org'}):
+                configured = importlib.reload(api)
+            client = TestClient(configured.app)
+            res = client.get(SPEC_ROUTE, headers={'Origin': 'https://kb.example.org'})
             self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), 'https://kb.example.org')
-            res = self.client.get(SPEC_ROUTE, headers={'Origin': self.allowed_origin})
+            res = client.get(SPEC_ROUTE, headers={'Origin': self.allowed_origin})
             self.assertIsNone(res.headers.get('Access-Control-Allow-Origin'))
         finally:
-            api.CORS_ALLOWED_ORIGINS = original
+            importlib.reload(api)
 
 
 if __name__ == '__main__':

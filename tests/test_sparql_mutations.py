@@ -7,6 +7,7 @@ from unittest.mock import patch
 import requests
 import main
 from main import GraphDBError
+from fastapi.testclient import TestClient
 from api import app
 
 class TestSparqlMutations(unittest.TestCase):
@@ -358,8 +359,8 @@ class TestSparqlMutations(unittest.TestCase):
         self.assertEqual(properties.get("http://coupled_modelling.owl#has_name"), "TestUnrelated")
         self.assertEqual(properties.get("http://coupled_modelling.owl#has_echo_level"), "1")
 
-    def test_flask_api_endpoint(self):
-        client = app.test_client()
+    def test_api_endpoint(self):
+        client = TestClient(app)
         payload = {
             "instance": self.test_subj,
             "data": {
@@ -389,7 +390,7 @@ class TestSparqlMutations(unittest.TestCase):
         self.assertEqual(bindings[0]["val"]["value"], "8")
 
     def test_graphdb_failure_returns_503(self):
-        client = app.test_client()
+        client = TestClient(app)
         payload = {
             "instance": self.test_subj,
             "data": {"echo_level": 5}
@@ -398,7 +399,7 @@ class TestSparqlMutations(unittest.TestCase):
         with patch('api.replace_values_sparql', side_effect=GraphDBError("Mocked Connection Failure")):
             res = client.post('/api/v1.0/replace_values/', json=payload)
             self.assertEqual(res.status_code, 503)
-            self.assertEqual(res.get_json()["error"], "Mocked Connection Failure")
+            self.assertEqual(res.json()["error"], "Mocked Connection Failure")
 
 if __name__ == "__main__":
     unittest.main()

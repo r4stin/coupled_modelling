@@ -7,6 +7,7 @@ import uuid as uuid_mod
 from unittest.mock import patch
 import main
 from main import GraphDBError
+from fastapi.testclient import TestClient
 from api import app
 
 class TestWebMutations(unittest.TestCase):
@@ -101,7 +102,7 @@ class TestWebMutations(unittest.TestCase):
                 pass
 
     def setUp(self):
-        self.app = app.test_client()
+        self.app = TestClient(app)
 
     def test_create_class_instance_success(self):
         payload = {
@@ -110,7 +111,7 @@ class TestWebMutations(unittest.TestCase):
         }
         res = self.app.post('/api/v1.0/create_class_instance/', json=payload)
         self.assertEqual(res.status_code, 201)
-        new_name = res.get_json()
+        new_name = res.json()
         self.assertTrue(new_name.startswith(self.test_prefix))
 
         # Query GraphDB to confirm
@@ -158,7 +159,7 @@ class TestWebMutations(unittest.TestCase):
         # Run deletion
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json(), {"status": "success", "target": None, "deleted": [], "kept": []})
+        self.assertEqual(res.json(), {"status": "success", "target": None, "deleted": [], "kept": []})
 
         # Confirm deleted
         self.assertFalse(main.query_graphdb(query_before).get("boolean", False))
@@ -187,7 +188,7 @@ class TestWebMutations(unittest.TestCase):
         # Run deletion
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json(), {"status": "success", "target": self.test_obj, "deleted": [], "kept": [self.test_obj]})
+        self.assertEqual(res.json(), {"status": "success", "target": self.test_obj, "deleted": [], "kept": [self.test_obj]})
 
         # Confirm deleted
         self.assertFalse(main.query_graphdb(query_before).get("boolean", False))
@@ -221,7 +222,7 @@ class TestWebMutations(unittest.TestCase):
         res = self.app.post('/api/v1.0/delete_value/', json=payload)
         self.assertEqual(res.status_code, 200)
         # Not an individual: neither collected nor kept.
-        self.assertEqual(res.get_json(), {"status": "success", "target": "instance_does_not_exist", "deleted": [], "kept": []})
+        self.assertEqual(res.json(), {"status": "success", "target": "instance_does_not_exist", "deleted": [], "kept": []})
 
     def test_replace_value_missing_params(self):
         res = self.app.post('/api/v1.0/replace_value/', json={"instance": self.test_inst, "property": "echo_level"})
@@ -303,9 +304,9 @@ class TestWebMutations(unittest.TestCase):
     def test_download_owl_success(self):
         res = self.app.get('/api/v1.0/download_owl/')
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.mimetype, "application/rdf+xml")
+        self.assertTrue(res.headers.get("Content-Type", "").startswith("application/rdf+xml"))
         self.assertIn("attachment", res.headers.get("Content-Disposition", ""))
-        self.assertTrue(len(res.data) > 0)
+        self.assertTrue(len(res.content) > 0)
 
     def test_database_error_503(self):
         # Patch query_graphdb to raise GraphDBError
@@ -320,7 +321,7 @@ class TestWebMutations(unittest.TestCase):
     def test_delete_instance_missing_param(self):
         res = self.app.post('/api/v1.0/delete_instance/', json={})
         self.assertEqual(res.status_code, 400)
-        self.assertIn("error", res.get_json())
+        self.assertIn("error", res.json())
 
     def test_delete_instance_success(self):
         create_res = self.app.post('/api/v1.0/create_class_instance/', json={
@@ -328,14 +329,14 @@ class TestWebMutations(unittest.TestCase):
             "label": "ToDeleteInstance"
         })
         self.assertEqual(create_res.status_code, 201)
-        inst_id = create_res.get_json()
+        inst_id = create_res.json()
 
         delete_res = self.app.post('/api/v1.0/delete_instance/', json={
             "instance": inst_id
         })
         self.assertEqual(delete_res.status_code, 200)
-        self.assertEqual(delete_res.get_json().get("status"), "success")
-        self.assertEqual(delete_res.get_json().get("instance"), inst_id)
+        self.assertEqual(delete_res.json().get("status"), "success")
+        self.assertEqual(delete_res.json().get("instance"), inst_id)
         self.assertFalse(main.instance_exists(inst_id))
 
     def _seed_subtree(self):
@@ -395,7 +396,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self.app.post('/api/v1.0/delete_instance/', json={"instance": names['root']})
         self.assertEqual(res.status_code, 200)
-        body = res.get_json()
+        body = res.json()
         self.assertEqual(body["status"], "success")
         self._assert_cascade_sets(body, names)
         for key in ('root', 'child', 'grandchild', 'exclusive'):
@@ -412,7 +413,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self.app.post('/api/v1.0/delete_instance/', json={"instance": names['root'], "cascade": False})
         self.assertEqual(res.status_code, 200)
-        body = res.get_json()
+        body = res.json()
         self.assertEqual(body["deleted"], [names['root']])
         self.assertEqual(body["kept"], [])
         self.assertEqual(set(body["unlinked_from"]), {names['outsider'], names['shared']})
@@ -433,14 +434,14 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self.app.get(f"/api/v1.0/get_instance_deletion_preview/?instance={names['root']}")
         self.assertEqual(res.status_code, 200)
-        self._assert_cascade_sets(res.get_json(), names)
+        self._assert_cascade_sets(res.json(), names)
         self.assertTrue(main.instance_exists(names['root']))
 
     def test_deletion_preview_without_cascade(self):
         names = self._seed_subtree()
         res = self.app.get(f"/api/v1.0/get_instance_deletion_preview/?instance={names['root']}&cascade=false")
         self.assertEqual(res.status_code, 200)
-        body = res.get_json()
+        body = res.json()
         self.assertEqual(body["deleted"], [names['root']])
         self.assertEqual(body["kept"], [])
         self.assertEqual(set(body["unlinked_from"]), {names['outsider'], names['shared']})
@@ -472,7 +473,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self._unlink(names['root'], 'solver_settings', names['child'])
         self.assertEqual(res.status_code, 200)
-        body = res.get_json()
+        body = res.json()
         self.assertEqual(body["status"], "success")
         self._assert_unlink_sets(body, names)
         self.assertFalse(self._link_exists(names['root'], 'has_solver_settings', names['child']))
@@ -486,7 +487,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self._unlink(names['child'], 'type', names['shared'])
         self.assertEqual(res.status_code, 200)
-        body = res.get_json()
+        body = res.json()
         self.assertEqual((body["target"], body["deleted"], body["kept"]), (names['shared'], [], [names['shared']]))
         self.assertFalse(self._link_exists(names['child'], 'has_type', names['shared']))
         self.assertTrue(main.instance_exists(names['sharedchild']))
@@ -495,7 +496,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self._unlink(names['child'], 'connect_to', names['othersystem'])
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json()["kept"], [names['othersystem']])
+        self.assertEqual(res.json()["kept"], [names['othersystem']])
         self.assertFalse(self._link_exists(names['child'], 'has_connect_to', names['othersystem']))
         self.assertTrue(main.instance_exists(names['othersystem']))
 
@@ -503,7 +504,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self._unlink(names['root'], 'solver_settings', names['child'], cascade=False)
         self.assertEqual(res.status_code, 200)
-        body = res.get_json()
+        body = res.json()
         self.assertEqual((body["deleted"], body["kept"]), ([], [names['child']]))
         self.assertFalse(self._link_exists(names['root'], 'has_solver_settings', names['child']))
         self.assertTrue(main.instance_exists(names['grandchild']))
@@ -513,17 +514,17 @@ class TestWebMutations(unittest.TestCase):
         self._insert_link(names['root'], 'has_connect_to', names['child'])
         res = self._unlink(names['root'], 'solver_settings', names['child'])
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json()["kept"], [names['child']])
+        self.assertEqual(res.json()["kept"], [names['child']])
         self.assertFalse(self._link_exists(names['root'], 'has_solver_settings', names['child']))
         self.assertTrue(self._link_exists(names['root'], 'has_connect_to', names['child']))
 
     def test_delete_value_of_a_link_that_is_not_stored_collects_nothing(self):
         # An orphan with no incoming link at all: only the stored-link rule protects it.
         names = self._seed_subtree()
-        orphan = self.app.post('/api/v1.0/create_class_instance/', json={"class": "solvers", "label": "orphan"}).get_json()
+        orphan = self.app.post('/api/v1.0/create_class_instance/', json={"class": "solvers", "label": "orphan"}).json()
         res = self._unlink(names['root'], 'solvers', orphan)
         self.assertEqual(res.status_code, 200)
-        self.assertEqual((res.get_json()["deleted"], res.get_json()["kept"]), ([], [orphan]))
+        self.assertEqual((res.json()["deleted"], res.json()["kept"]), ([], [orphan]))
         self.assertTrue(main.instance_exists(orphan))
 
     def test_delete_value_of_a_self_link_keeps_the_holder(self):
@@ -531,7 +532,7 @@ class TestWebMutations(unittest.TestCase):
         self._insert_link(names['child'], 'has_connect_to', names['child'])
         res = self._unlink(names['child'], 'connect_to', names['child'])
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.get_json()["kept"], [names['child']])
+        self.assertEqual(res.json()["kept"], [names['child']])
         self.assertFalse(self._link_exists(names['child'], 'has_connect_to', names['child']))
         self.assertTrue(main.instance_exists(names['child']))
 
@@ -539,7 +540,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self._unlink(names['child'], 'type', 'solver_settings')
         self.assertEqual(res.status_code, 200)
-        body = res.get_json()
+        body = res.json()
         self.assertEqual((body["target"], body["deleted"], body["kept"]), ('solver_settings', [], []))
         self.assertFalse(self._link_exists(names['child'], 'has_type', 'solver_settings'))
         class_ask = f"ASK {{ GRAPH <{self.onto_uri}> {{ {main.serialize_iri('solver_settings')} {main.RDF_TYPE} <http://www.w3.org/2002/07/owl#Class> . }} }}"
@@ -553,7 +554,7 @@ class TestWebMutations(unittest.TestCase):
         names = self._seed_subtree()
         res = self.app.get(f"/api/v1.0/get_value_deletion_preview/?instance={names['root']}&property=solver_settings&target={names['child']}")
         self.assertEqual(res.status_code, 200)
-        self._assert_unlink_sets(res.get_json(), names)
+        self._assert_unlink_sets(res.json(), names)
         self.assertTrue(self._link_exists(names['root'], 'has_solver_settings', names['child']))
         self.assertTrue(main.instance_exists(names['exclusive']))
 
@@ -579,7 +580,7 @@ class TestWebMutations(unittest.TestCase):
             "new_value": {"kind": "object", "id": "has_name"},
         })
         self.assertEqual(res.status_code, 400)
-        self.assertIn("does not exist", res.get_json()["error"])
+        self.assertIn("does not exist", res.json()["error"])
 
     def test_instance_metadata_describes_linked_objects(self):
         # Re-assert the link: sibling tests in this class delete the fixture's
@@ -592,7 +593,7 @@ class TestWebMutations(unittest.TestCase):
 
         res = self.app.get(f'/api/v1.0/get_instance_property_metadata/?instance={self.test_inst}')
         self.assertEqual(res.status_code, 200)
-        groups = {group["property"]: group["values"] for group in res.get_json()["properties"]}
+        groups = {group["property"]: group["values"] for group in res.json()["properties"]}
 
         linked = groups["connect_to"][0]
         self.assertEqual(linked["kind"], "object")
@@ -629,7 +630,7 @@ class TestWebMutations(unittest.TestCase):
             "label": label
         })
         self.assertEqual(create_res.status_code, 201)
-        target_id = create_res.get_json()
+        target_id = create_res.json()
 
         res = self.app.post('/api/v1.0/add_values/', json={
             "instance": self.test_inst,
@@ -694,7 +695,7 @@ class TestWebMutations(unittest.TestCase):
             "data": {"echo_level": None}
         })
         self.assertEqual(res.status_code, 400)
-        self.assertIn("error", res.get_json())
+        self.assertIn("error", res.json())
 
     def test_add_values_rejects_missing_instance_reference(self):
         res = self.app.post('/api/v1.0/add_values/', json={
@@ -702,7 +703,7 @@ class TestWebMutations(unittest.TestCase):
             "data": {"solver": "instance_does_not_exist_999"}
         })
         self.assertEqual(res.status_code, 400)
-        self.assertIn("does not exist", res.get_json().get("error", ""))
+        self.assertIn("does not exist", res.json().get("error", ""))
 
     def test_add_values_invalid_reference_inserts_nothing(self):
         orphan_label = f"Orphan Candidate {self.test_prefix}"

@@ -1,13 +1,73 @@
+"""HTTP layer of the knowledge base: FastAPI routes under /api/v1.0/ over the
+framework-agnostic core in main.py. The web explorer lives in the separate
+coupled-modelling-frontend repository."""
+import functools
 import os
+import threading
+import traceback
 
-from flask import *
-from main import *
+import uvicorn
+from fastapi import APIRouter, FastAPI, Query
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import FileResponse, JSONResponse, Response
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from main import (
+    REPOSITORY,
+    SEARCH_RESULT_LIMIT,
+    GraphDBError,
+    add_values_sparql,
+    copy_instance,
+    copy_instance_recursively,
+    create_class_instance_sparql,
+    create_coupled,
+    create_instance_sparql,
+    delete_instance_sparql,
+    delete_value_sparql,
+    delete_values_sparql,
+    export_coupled_kratos,
+    get_class_hierarchy,
+    get_class_hierarchy_metadata,
+    get_class_instance_summaries,
+    get_class_instances,
+    get_class_metadata,
+    get_class_properties_recursively,
+    get_graphdb_health,
+    get_instance_deletion_preview,
+    get_instance_properties_recursively,
+    get_instance_property_metadata,
+    get_onto_path,
+    get_value_deletion_preview,
+    import_coupled_kratos,
+    infer_coupled_system_structure,
+    reload_ontology_from_graphdb,
+    replace_properties_sparql,
+    replace_value_sparql,
+    replace_values_sparql,
+    save_locally,
+    save_onto,
+    search_entities,
+)
+from schemas import (
+    CopyInstanceBody,
+    CopyInstanceRecursivelyBody,
+    CoupledSystemBody,
+    CreateClassInstanceBody,
+    CreateCoupledBody,
+    CreateInstanceBody,
+    DeleteInstanceBody,
+    DeleteValueBody,
+    DeleteValuesBody,
+    ImportKratosBody,
+    InstanceDataBody,
+    ReplaceValueBody,
+)
 
-# API-only service: the web explorer lives in the separate coupled-modelling-frontend repo.
-app = Flask(__name__, static_folder=None)
+API_PREFIX = '/api/v1.0'
+SPEC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'openapi.yaml')
 
-# Cross-origin access for the separate Next.js frontend (coupled-modelling-frontend).
 # Comma-separated list of allowed origins; defaults to the local frontend dev server.
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
@@ -16,496 +76,363 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 
-@app.after_request
-def add_cors_headers(response):
-    origin = request.headers.get('Origin')
-    if origin and (origin in CORS_ALLOWED_ORIGINS or '*' in CORS_ALLOWED_ORIGINS):
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Vary'] = 'Origin'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-        response.headers['Access-Control-Max-Age'] = '86400'
-    return response
+def error_response(status, message):
+    return JSONResponse(status_code=status, content={'error': message})
 
 
-@app.route('/api/v1.0/openapi.yaml', methods=['GET'])
+async def error_floor(request, call_next):
+    """Floor for failures no route mapping caught: the error shape, never a plain-text 500."""
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        traceback.print_exc()
+        return error_response(500, str(exc))
+
+
+# openapi.yaml is the published contract; the generated document stays unpublished.
+app = FastAPI(title='Coupled Modelling API', version='1.0.0', openapi_url=None, docs_url=None, redoc_url=None)
+# The floor sits inside the CORS layer so its responses carry the CORS headers too.
+app.middleware('http')(error_floor)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOWED_ORIGINS,
+    allow_methods=['GET', 'POST', 'OPTIONS'],
+    allow_headers=['Content-Type'],
+    max_age=86400,
+)
+router = APIRouter(prefix=API_PREFIX)
+
+
+def get_route(path, **kwargs):
+    """GET route that also answers HEAD, as the previous framework did."""
+    return router.api_route(path, methods=['GET', 'HEAD'], **kwargs)
+
+
+# The Owlready2 routes rebind the module-level ontology; one at a time.
+SEMANTIC_LOCK = threading.Lock()
+
+# Failure class -> status, checked in order.
+EXPLORER_ERRORS = ((GraphDBError, 503), (ValueError, 400), (Exception, 500))
+LEGACY_ERRORS = ((Exception, 400),)
+DOWNLOAD_ERRORS = ((Exception, 500),)
+
+
+def describe_validation(exc):
+    parts = []
+    for error in exc.errors():
+        # Integer parts are list indexes or byte offsets, not parameter names.
+        location = [part for part in error.get('loc', ()) if isinstance(part, str) and part not in ('body', 'query')]
+        parts.append(f"{'.'.join(location) or 'request'}: {error.get('msg')}")
+    return '; '.join(parts)
+
+
+@app.exception_handler(RequestValidationError)
+def validation_error(request, exc):
+    return error_response(400, describe_validation(exc))
+
+
+@app.exception_handler(StarletteHTTPException)
+def http_error(request, exc):
+    return error_response(exc.status_code, str(exc.detail))
+
+
+def mapped(errors):
+    """Turns the failure classes of a route into the documented error responses."""
+    def decorate(endpoint):
+        @functools.wraps(endpoint)
+        def wrapper(*args, **kwargs):
+            try:
+                return endpoint(*args, **kwargs)
+            except Exception as exc:
+                for failure, status in errors:
+                    if isinstance(exc, failure):
+                        if status >= 500:
+                            traceback.print_exc()
+                        return error_response(status, str(exc))
+                raise
+        return wrapper
+    return decorate
+
+
+def health_error(status, exc):
+    return JSONResponse(
+        status_code=status,
+        content={'status': 'error', 'graphdb': 'unavailable', 'repository': REPOSITORY, 'error': str(exc)},
+    )
+
+
+@get_route('/openapi.yaml')
 def api_openapi_spec():
-    spec_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'openapi.yaml')
-    return send_file(spec_path, mimetype='application/yaml')
+    return FileResponse(SPEC_PATH, media_type='application/yaml')
 
 
-@app.route('/api/v1.0/health/', methods=['GET'])
+@get_route('/docs', include_in_schema=False)
+def api_docs():
+    return get_swagger_ui_html(openapi_url=f'{API_PREFIX}/openapi.yaml', title='Coupled Modelling API')
+
+
+def ontology_bytes():
+    """Serialises the current ontology to disk and returns the bytes while the lock is still held."""
+    save_locally()
+    with open(get_onto_path(), 'rb') as ontology_file:
+        return ontology_file.read()
+
+
+@get_route('/health/')
 def api_health():
     try:
-        health_data = get_graphdb_health()
-        return jsonify(health_data), 200
-    except GraphDBError as e:
-        return jsonify(status="error", graphdb="unavailable", repository=REPOSITORY, error=str(e)), 503
-    except Exception as e:
-        return jsonify(status="error", graphdb="unavailable", repository=REPOSITORY, error=str(e)), 500
+        return get_graphdb_health()
+    except GraphDBError as exc:
+        return health_error(503, exc)
+    except Exception as exc:
+        return health_error(500, exc)
 
 
-@app.route('/api/v1.0/get_class_hierarchy_metadata/', methods=['GET'])
+@get_route('/get_class_hierarchy_metadata/')
+@mapped(EXPLORER_ERRORS)
 def api_get_class_hierarchy_metadata():
-    try:
-        hierarchy = get_class_hierarchy_metadata()
-        return jsonify(hierarchy), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+    return get_class_hierarchy_metadata()
 
 
-@app.route('/api/v1.0/get_class_instance_summaries/', methods=['GET'])
-def api_get_class_instance_summaries():
-    class_name = request.args.get('class')
-    try:
-        summaries = get_class_instance_summaries(class_name)
-        return jsonify(summaries), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@get_route('/get_class_instance_summaries/')
+@mapped(EXPLORER_ERRORS)
+def api_get_class_instance_summaries(class_name: str | None = Query(None, alias='class')):
+    return get_class_instance_summaries(class_name)
 
-@app.route('/api/v1.0/search/', methods=['GET'])
-def api_search():
-    raw_limit = request.args.get('limit')
+
+@get_route('/search/')
+@mapped(EXPLORER_ERRORS)
+def api_search(q: str | None = None, entity_type: str = Query('all', alias='type'), limit: str | None = None):
     try:
-        limit = int(raw_limit) if raw_limit else SEARCH_RESULT_LIMIT
+        limit_value = int(limit) if limit else SEARCH_RESULT_LIMIT
     except ValueError:
-        return jsonify(error="limit must be an integer"), 400
-    try:
-        results = search_entities(request.args.get('q'), request.args.get('type', 'all'), limit)
-        return jsonify(results), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+        return error_response(400, 'limit must be an integer')
+    return search_entities(q, entity_type, limit_value)
 
 
-@app.route('/api/v1.0/get_class_metadata/', methods=['GET'])
-def api_get_class_metadata():
-    class_name = request.args.get('class')
+@get_route('/get_class_metadata/')
+@mapped(EXPLORER_ERRORS)
+def api_get_class_metadata(class_name: str | None = Query(None, alias='class')):
     if not class_name:
-        return jsonify(error="Missing required query parameter: class"), 400
-    try:
-        metadata = get_class_metadata(class_name)
-        return jsonify(metadata), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+        return error_response(400, 'Missing required query parameter: class')
+    return get_class_metadata(class_name)
 
 
-@app.route('/api/v1.0/get_instance_property_metadata/', methods=['GET'])
-def api_get_instance_property_metadata():
-    inst_name = request.args.get('instance')
-    if not inst_name:
-        return jsonify(error="Missing required query parameter: instance"), 400
-    try:
-        metadata = get_instance_property_metadata(inst_name)
-        return jsonify(metadata), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@get_route('/get_instance_property_metadata/')
+@mapped(EXPLORER_ERRORS)
+def api_get_instance_property_metadata(instance: str | None = None):
+    if not instance:
+        return error_response(400, 'Missing required query parameter: instance')
+    return get_instance_property_metadata(instance)
 
-@app.route('/api/v1.0/import_coupled_kratos/', methods=['POST'])
-def api_import_coupled_kratos():
-    args = request.get_json()
-    data = args.get('data')
-    label = args.get('label')
+
+@router.post('/import_coupled_kratos/', status_code=201)
+@mapped(LEGACY_ERRORS)
+def api_import_coupled_kratos(body: ImportKratosBody):
     try:
-        reload_ontology_from_graphdb()
-        inst = import_coupled_kratos(data, label)
-        save_onto()
-        return jsonify(inst), 201
-    except Exception as e:
-        import traceback
+        with SEMANTIC_LOCK:
+            reload_ontology_from_graphdb()
+            inst = import_coupled_kratos(body.data, body.label)
+            save_onto()
+    except Exception:
         traceback.print_exc()
-        return jsonify(error=str(e)), 400
+        raise
+    return inst
 
 
-@app.route('/api/v1.0/create_coupled/', methods=['POST'])
-def api_create_coupled():
-    args = request.get_json()
-    label = args.get('label')
-    try:
+@router.post('/create_coupled/', status_code=201)
+@mapped(LEGACY_ERRORS)
+def api_create_coupled(body: CreateCoupledBody):
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        inst = create_coupled(label)
+        inst = create_coupled(body.label)
         save_onto()
-        return jsonify(inst), 201
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+    return inst
 
 
-@app.route('/api/v1.0/copy_instance_recursively/', methods=['POST'])
-def api_copy_instance_recursively():
-    args = request.get_json()
-    inst = args.get('instance')
-    parent = args.get('parent')
-    data = args.get('data')
-    depth = args.get('depth')
-    recursive = args.get('recursive')
-    if depth:
-        depth = int(depth)
-    if recursive == 'True':
-        recursive = True
-    else:
-        recursive = False
-        
-    try:
+@router.post('/copy_instance_recursively/', status_code=201)
+@mapped(LEGACY_ERRORS)
+def api_copy_instance_recursively(body: CopyInstanceRecursivelyBody):
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        inst = copy_instance_recursively(inst, parent, data, depth, recursive)
+        inst = copy_instance_recursively(body.instance, body.parent, body.data, body.depth, body.recursive)
         save_onto()
-        return jsonify(inst), 201
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+    return inst
 
 
-@app.route('/api/v1.0/copy_instance/', methods=['POST'])
-def api_copy_instance():
-    args = request.get_json()
-    inst = args.get('instance')
-    parent = args.get('parent')
-    data = args.get('data')
-    try:
+@router.post('/copy_instance/', status_code=201)
+@mapped(LEGACY_ERRORS)
+def api_copy_instance(body: CopyInstanceBody):
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        new_inst = copy_instance(inst, parent, data)
+        new_inst = copy_instance(body.instance, body.parent, body.data)
         save_onto()
-        return jsonify(new_inst), 201
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+    return new_inst
 
 
-@app.route('/api/v1.0/create_instance/', methods=['POST'])
-def api_create_instance():
-    args = request.get_json()
-    prop = args.get('property')
-    parent = args.get('parent')
-    data = args.get('data')
-    try:
-        inst = create_instance_sparql(prop, parent, data)
-        return jsonify(inst), 201
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/create_instance/', status_code=201)
+@mapped(EXPLORER_ERRORS)
+def api_create_instance(body: CreateInstanceBody):
+    return create_instance_sparql(body.property, body.parent, body.data)
 
 
-@app.route('/api/v1.0/get_instance_properties_recursively/', methods=['GET'])
-def api_get_instance_properties_recursively():
-    args = request.args
-    inst = args.get('instance')
-    depth = args.get('depth')
-    recursive = args.get('recursive')
-    if depth:
-        depth = int(depth)
-    if recursive == 'True':
-        recursive = True
-    else:
-        recursive = False
-        
-    try:
+@get_route('/get_instance_properties_recursively/')
+@mapped(LEGACY_ERRORS)
+def api_get_instance_properties_recursively(instance: str | None = None, depth: int | None = None, recursive: bool = False):
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        props = get_instance_properties_recursively(inst, depth, recursive)
-        return jsonify(props), 200
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+        return get_instance_properties_recursively(instance, depth, recursive)
 
 
-@app.route('/api/v1.0/replace_values/', methods=['POST'])
-def api_replace_values():
-    args = request.get_json()
-    inst = args.get('instance')
-    data = args.get('data')
-    try:
-        replace_values_sparql(inst, data)
-        return jsonify(''), 201
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/replace_values/', status_code=201)
+@mapped(EXPLORER_ERRORS)
+def api_replace_values(body: InstanceDataBody):
+    replace_values_sparql(body.instance, body.data)
+    return ''
 
 
-@app.route('/api/v1.0/delete_values/', methods=['POST'])
-def api_delete_values():
-    args = request.get_json()
-    inst = args.get('instance')
-    props = args.get('properties')
-    try:
-        delete_values_sparql(inst, props)
-        return jsonify(''), 201
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/delete_values/', status_code=201)
+@mapped(EXPLORER_ERRORS)
+def api_delete_values(body: DeleteValuesBody):
+    delete_values_sparql(body.instance, body.properties)
+    return ''
 
 
-@app.route('/api/v1.0/add_values/', methods=['POST'])
-def api_add_values():
-    args = request.get_json()
-    inst = args.get('instance')
-    data = args.get('data')
-    try:
-        add_values_sparql(inst, data)
-        return jsonify(''), 201
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/add_values/', status_code=201)
+@mapped(EXPLORER_ERRORS)
+def api_add_values(body: InstanceDataBody):
+    add_values_sparql(body.instance, body.data)
+    return ''
 
 
-@app.route('/api/v1.0/replace_properties/', methods=['POST'])
-def api_replace_properties():
-    args = request.get_json()
-    inst = args.get('instance')
-    data = args.get('data')
-    try:
-        replace_properties_sparql(inst, data)
-        return jsonify(''), 201
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/replace_properties/', status_code=201)
+@mapped(EXPLORER_ERRORS)
+def api_replace_properties(body: InstanceDataBody):
+    replace_properties_sparql(body.instance, body.data)
+    return ''
 
 
-@app.route('/api/v1.0/infer_coupled_structure/', methods=['POST'])
-def api_infer_coupled_structure():
-    args = request.get_json()
-    inst = args.get('coupled_system')
-    try:
+@router.post('/infer_coupled_structure/', status_code=201)
+@mapped(LEGACY_ERRORS)
+def api_infer_coupled_structure(body: CoupledSystemBody):
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        infer_coupled_system_structure(inst)
+        infer_coupled_system_structure(body.coupled_system)
         save_onto()
-        return jsonify(''), 201
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+    return ''
 
 
-@app.route('/api/v1.0/export_coupled_kratos/', methods=['POST'])
-def api_export_coupled_kratos():
-    args = request.get_json()
-    inst = args.get('coupled_system')
-    try:
+@router.post('/export_coupled_kratos/', status_code=201)
+@mapped(LEGACY_ERRORS)
+def api_export_coupled_kratos(body: CoupledSystemBody):
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        export = export_coupled_kratos(inst)
-        return jsonify(export), 201
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+        return export_coupled_kratos(body.coupled_system)
 
 
-@app.route('/api/v1.0/save_onto/', methods=['POST'])
+@router.post('/save_onto/', status_code=201)
+@mapped(LEGACY_ERRORS)
 def api_save_onto():
-    try:
+    with SEMANTIC_LOCK:
         save_onto()
-        return jsonify(''), 201
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+    return ''
 
 
-@app.route('/api/v1.0/save_locally/', methods=['GET'])
+@get_route('/save_locally/')
+@mapped(LEGACY_ERRORS)
 def api_save_locally():
-    try:
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        save_locally()
-        return send_file(get_onto_path()), 200
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+        data = ontology_bytes()
+    return Response(content=data, media_type='application/rdf+xml', headers={'Content-Disposition': 'inline; filename="onto.owl"'})
 
 
-@app.route('/api/v1.0/get_class_hierarchy/', methods=['GET'])
+@get_route('/get_class_hierarchy/')
+@mapped(LEGACY_ERRORS)
 def api_get_class_hierarchy():
-    try:
-        classes = get_class_hierarchy()
-        return jsonify(classes), 200
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+    return get_class_hierarchy()
 
 
-@app.route('/api/v1.0/get_class_properties_recursively/', methods=['GET'])
-def api_get_class_properties_recursively():
-    args = request.args
-    cl = args.get('class')
-    depth = args.get('depth')
-    recursive = args.get('recursive')
-    if depth:
-        depth = int(depth)
-    if recursive == 'True':
-        recursive = True
-    else:
-        recursive = False
-    try:
+@get_route('/get_class_properties_recursively/')
+@mapped(LEGACY_ERRORS)
+def api_get_class_properties_recursively(class_name: str | None = Query(None, alias='class'), depth: int | None = None, recursive: bool = False):
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        props = get_class_properties_recursively(cl, depth, recursive)
-        return jsonify(props), 200
-    except Exception as e:
-        return jsonify(error=str(e)), 400
+        return get_class_properties_recursively(class_name, depth, recursive)
 
 
-@app.route('/api/v1.0/get_class_instances/', methods=['GET'])
-def api_get_class_instances():
-    try:
-        cl = request.args.get('class')
-        insts = get_class_instances(cl)
-        return jsonify(insts), 200
-    except Exception as e:
-        return jsonify(error=str(e)), 400
-    
-
-@app.route('/api/v1.0/replace_value/', methods=['POST'])
-def api_replace_value():
-    args = request.get_json() or {}
-    inst = args.get('instance')
-    prop = args.get('property')
-    old_value = args.get('old_value')
-    new_value = args.get('new_value')
-
-    if not inst or not prop or old_value is None or new_value is None:
-        return jsonify(error="instance, property, old_value, and new_value parameters are required"), 400
-
-    try:
-        replace_value_sparql(inst, prop, old_value, new_value)
-        return jsonify(''), 201
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@get_route('/get_class_instances/')
+@mapped(LEGACY_ERRORS)
+def api_get_class_instances(class_name: str | None = Query(None, alias='class')):
+    return get_class_instances(class_name)
 
 
-@app.route('/api/v1.0/delete_value/', methods=['POST'])
-def api_delete_value():
-    args = request.get_json() or {}
-    inst = args.get('instance')
-    prop = args.get('property')
-    value_obj = args.get('value')
-    cascade = args.get('cascade', True)
-
-    if not inst or not prop or value_obj is None:
-        return jsonify(error="instance, property, and value parameters are required"), 400
-    if not isinstance(cascade, bool):
-        return jsonify(error="cascade parameter must be a boolean"), 400
-
-    try:
-        result = delete_value_sparql(inst, prop, value_obj, cascade=cascade)
-        return jsonify(status="success", **result), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/replace_value/', status_code=201)
+@mapped(EXPLORER_ERRORS)
+def api_replace_value(body: ReplaceValueBody | None = None):
+    body = body or ReplaceValueBody()
+    if not body.instance or not body.property or body.old_value is None or body.new_value is None:
+        return error_response(400, 'instance, property, old_value, and new_value parameters are required')
+    replace_value_sparql(body.instance, body.property, body.old_value, body.new_value)
+    return ''
 
 
-@app.route('/api/v1.0/get_value_deletion_preview/', methods=['GET'])
-def api_get_value_deletion_preview():
-    inst = request.args.get('instance')
-    prop = request.args.get('property')
-    target = request.args.get('target')
-    if not inst or not prop or not target:
-        return jsonify(error="Missing required query parameters: instance, property, target"), 400
-    try:
-        return jsonify(get_value_deletion_preview(inst, prop, target)), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/delete_value/')
+@mapped(EXPLORER_ERRORS)
+def api_delete_value(body: DeleteValueBody | None = None):
+    body = body or DeleteValueBody()
+    if not body.instance or not body.property or body.value is None:
+        return error_response(400, 'instance, property, and value parameters are required')
+    result = delete_value_sparql(body.instance, body.property, body.value, cascade=body.cascade)
+    return {'status': 'success', **result}
 
 
-@app.route('/api/v1.0/create_class_instance/', methods=['POST'])
-def api_create_class_instance():
-    args = request.get_json()
-    class_name = args.get('class')
-    label = args.get('label')
-    
-    if not class_name or not label:
-        return jsonify(error="class and label parameters are required"), 400
-        
-    try:
-        new_name = create_class_instance_sparql(class_name, label)
-        return jsonify(new_name), 201
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@get_route('/get_value_deletion_preview/')
+@mapped(EXPLORER_ERRORS)
+def api_get_value_deletion_preview(instance: str | None = None, property: str | None = None, target: str | None = None):
+    if not instance or not property or not target:
+        return error_response(400, 'Missing required query parameters: instance, property, target')
+    return get_value_deletion_preview(instance, property, target)
 
 
-@app.route('/api/v1.0/delete_instance/', methods=['POST'])
-def api_delete_instance():
-    args = request.get_json() or {}
-    instance_name = args.get('instance')
-    cascade = args.get('cascade', True)
-
-    if not instance_name:
-        return jsonify(error="instance parameter is required"), 400
-    if not isinstance(cascade, bool):
-        return jsonify(error="cascade parameter must be a boolean"), 400
-
-    try:
-        result = delete_instance_sparql(instance_name, cascade=cascade)
-        return jsonify(status="success", **result), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/create_class_instance/', status_code=201)
+@mapped(EXPLORER_ERRORS)
+def api_create_class_instance(body: CreateClassInstanceBody | None = None):
+    body = body or CreateClassInstanceBody()
+    if not body.class_name or not body.label:
+        return error_response(400, 'class and label parameters are required')
+    return create_class_instance_sparql(body.class_name, body.label)
 
 
-@app.route('/api/v1.0/get_instance_deletion_preview/', methods=['GET'])
-def api_get_instance_deletion_preview():
-    instance_name = request.args.get('instance')
-    cascade = request.args.get('cascade', 'true').lower()
-    if not instance_name:
-        return jsonify(error="Missing required query parameter: instance"), 400
-    if cascade not in ('true', 'false'):
-        return jsonify(error="cascade parameter must be true or false"), 400
-    try:
-        return jsonify(get_instance_deletion_preview(instance_name, cascade=(cascade == 'true'))), 200
-    except GraphDBError as e:
-        return jsonify(error=str(e)), 503
-    except ValueError as e:
-        return jsonify(error=str(e)), 400
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+@router.post('/delete_instance/')
+@mapped(EXPLORER_ERRORS)
+def api_delete_instance(body: DeleteInstanceBody | None = None):
+    body = body or DeleteInstanceBody()
+    if not body.instance:
+        return error_response(400, 'instance parameter is required')
+    result = delete_instance_sparql(body.instance, cascade=body.cascade)
+    return {'status': 'success', **result}
 
 
+@get_route('/get_instance_deletion_preview/')
+@mapped(EXPLORER_ERRORS)
+def api_get_instance_deletion_preview(instance: str | None = None, cascade: bool = True):
+    if not instance:
+        return error_response(400, 'Missing required query parameter: instance')
+    return get_instance_deletion_preview(instance, cascade=cascade)
 
-@app.route('/api/v1.0/download_owl/', methods=['GET'])
+
+@get_route('/download_owl/')
+@mapped(DOWNLOAD_ERRORS)
 def api_download_owl():
-    try:
+    with SEMANTIC_LOCK:
         reload_ontology_from_graphdb()
-        save_locally()
-        return send_file(get_onto_path(), as_attachment=True, mimetype="application/rdf+xml")
-    except Exception as e:
-        return jsonify(error=str(e)), 500
+        data = ontology_bytes()
+    return Response(content=data, media_type='application/rdf+xml', headers={'Content-Disposition': 'attachment; filename="onto.owl"'})
 
 
-if __name__ == "__main__":
-    app.run()
+app.include_router(router)
+
+
+if __name__ == '__main__':
+    uvicorn.run(app, host='127.0.0.1', port=5000)

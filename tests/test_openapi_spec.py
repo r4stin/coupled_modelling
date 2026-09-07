@@ -6,7 +6,8 @@ import unittest
 # Adjust paths to import from backend/
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend'))
 
-from api import app
+from fastapi.testclient import TestClient
+from api import app, router
 
 SPEC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'openapi.yaml')
 API_PREFIX = '/api/v1.0'
@@ -40,7 +41,7 @@ def parse_spec_operations(spec_text):
 
 
 class TestOpenAPISpecCoverage(unittest.TestCase):
-    """Verifies openapi.yaml stays in sync with the Flask routes in backend/api.py."""
+    """Verifies openapi.yaml stays in sync with the routes in backend/api.py."""
 
     @classmethod
     def setUpClass(cls):
@@ -48,14 +49,14 @@ class TestOpenAPISpecCoverage(unittest.TestCase):
             cls.spec_text = f.read()
         cls.spec_operations = parse_spec_operations(cls.spec_text)
 
-    def get_flask_operations(self):
+    def get_app_operations(self):
+        """(path, METHOD) pairs of every route registered on the API router."""
         operations = set()
-        for rule in app.url_map.iter_rules():
-            if not rule.rule.startswith(API_PREFIX):
+        for route in router.routes:
+            if not route.path.startswith(API_PREFIX) or not route.include_in_schema:
                 continue
-            path = rule.rule[len(API_PREFIX):]
-            for method in rule.methods - {'OPTIONS', 'HEAD'}:
-                operations.add((path, method))
+            for method in route.methods - {'OPTIONS', 'HEAD'}:
+                operations.add((route.path[len(API_PREFIX):], method))
         return operations
 
     def test_spec_parses_and_has_operations(self):
@@ -63,28 +64,28 @@ class TestOpenAPISpecCoverage(unittest.TestCase):
         self.assertIn('openapi:', self.spec_text)
         self.assertGreaterEqual(len(self.spec_operations), 20)
 
-    def test_every_flask_route_is_documented(self):
-        """Every /api/v1.0/ route registered in Flask appears in openapi.yaml."""
-        missing = self.get_flask_operations() - self.spec_operations
+    def test_every_app_route_is_documented(self):
+        """Every /api/v1.0/ route the app registers appears in openapi.yaml."""
+        missing = self.get_app_operations() - self.spec_operations
         self.assertEqual(
             missing, set(),
-            f"Flask routes missing from openapi.yaml: {sorted(missing)}"
+            f"Routes missing from openapi.yaml: {sorted(missing)}"
         )
 
-    def test_every_documented_path_exists_in_flask(self):
-        """openapi.yaml documents no operation that the Flask app does not serve."""
-        stale = self.spec_operations - self.get_flask_operations()
+    def test_every_documented_path_exists_in_app(self):
+        """openapi.yaml documents no operation that the app does not serve."""
+        stale = self.spec_operations - self.get_app_operations()
         self.assertEqual(
             stale, set(),
-            f"openapi.yaml operations with no matching Flask route: {sorted(stale)}"
+            f"openapi.yaml operations with no matching route: {sorted(stale)}"
         )
 
     def test_spec_endpoint_serves_the_file(self):
         """GET /api/v1.0/openapi.yaml serves the specification document."""
-        client = app.test_client()
+        client = TestClient(app)
         response = client.get('/api/v1.0/openapi.yaml')
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.data.decode('utf-8').startswith('openapi:'))
+        self.assertTrue(response.text.startswith('openapi:'))
 
     def test_server_url_matches_api_prefix(self):
         """The spec's server URL carries the /api/v1.0 prefix the routes omit."""

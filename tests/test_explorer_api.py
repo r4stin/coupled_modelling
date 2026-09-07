@@ -9,7 +9,8 @@ import os
 # Adjust paths to import from backend/
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend'))
 
-from api import app
+from fastapi.testclient import TestClient
+from api import app, router
 from main import (
     GraphDBError, 
     select_preferred_label, 
@@ -22,13 +23,12 @@ from main import (
 
 class TestExplorerApi(unittest.TestCase):
     def setUp(self):
-        self.app = app.test_client()
-        self.app.testing = True
-
+        self.app = TestClient(app)
     def test_root_route_removed(self):
         """The API serves no UI: every registered route lives under /api/."""
-        rules = {rule.rule for rule in app.url_map.iter_rules()}
-        non_api = [rule for rule in rules if not rule.startswith('/api/')]
+        # Routes included from the router plus any registered on the app itself.
+        paths = {route.path for route in router.routes} | {route.path for route in app.routes if hasattr(route, 'path')}
+        non_api = [path for path in paths if not path.startswith('/api/')]
         self.assertEqual(non_api, [])
         self.assertEqual(self.app.get('/').status_code, 404)
 
@@ -44,7 +44,7 @@ class TestExplorerApi(unittest.TestCase):
         response = self.app.get('/api/v1.0/health/')
         self.assertEqual(response.status_code, 200)
         
-        data = json.loads(response.data.decode('utf-8'))
+        data = response.json()
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["graphdb"], "connected")
         self.assertEqual(data["repository"], "coupled_modelling")
@@ -57,7 +57,7 @@ class TestExplorerApi(unittest.TestCase):
         response = self.app.get('/api/v1.0/health/')
         self.assertEqual(response.status_code, 503)
         
-        data = json.loads(response.data.decode('utf-8'))
+        data = response.json()
         self.assertEqual(data["status"], "error")
         self.assertEqual(data["graphdb"], "unavailable")
         self.assertIn("Connection refused", data["error"])
@@ -119,7 +119,7 @@ class TestExplorerApi(unittest.TestCase):
         mock_helper.return_value = {"target": "instance_c", "deleted": ["instance_c"], "kept": []}
         response = self.app.get('/api/v1.0/get_value_deletion_preview/?instance=instance_a&property=solver&target=instance_c')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), mock_helper.return_value)
+        self.assertEqual(response.json(), mock_helper.return_value)
         mock_helper.assert_called_once_with('instance_a', 'solver', 'instance_c')
 
     @patch('api.get_value_deletion_preview')
@@ -142,7 +142,7 @@ class TestExplorerApi(unittest.TestCase):
         payload = {"instance": "instance_a", "property": "solver", "value": {"kind": "object", "id": "instance_c"}}
         response = self.app.post('/api/v1.0/delete_value/', json=payload)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), {"status": "success", **mock_helper.return_value})
+        self.assertEqual(response.json(), {"status": "success", **mock_helper.return_value})
         mock_helper.assert_called_once_with("instance_a", "solver", payload["value"], cascade=True)
 
     @patch('api.delete_value_sparql')
@@ -434,7 +434,7 @@ class TestExplorerApi(unittest.TestCase):
         """Verify get_class_metadata returns 400 when class query parameter is missing."""
         response = self.app.get('/api/v1.0/get_class_metadata/')
         self.assertEqual(response.status_code, 400)
-        data = json.loads(response.data.decode('utf-8'))
+        data = response.json()
         self.assertIn("Missing required query parameter", data["error"])
 
     @patch('main.query_graphdb')
@@ -592,9 +592,7 @@ class TestExplorerApi(unittest.TestCase):
 
 class TestSearch(unittest.TestCase):
     def setUp(self):
-        self.app = app.test_client()
-        self.app.testing = True
-
+        self.app = TestClient(app)
     def test_search_route_requires_query_text(self):
         """Verify a missing or blank q parameter returns 400."""
         for url in ['/api/v1.0/search/', '/api/v1.0/search/?q=%20']:

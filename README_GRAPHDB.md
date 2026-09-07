@@ -38,9 +38,13 @@ The application automatically configures itself, but you can override connection
    pip install -r coupled_modelling/requirements.txt
    pip install -e .
    ```
-2. Start the local Flask API server:
+2. Start the API server (uvicorn):
    ```bash
    python backend/api.py
+   ```
+   For development with auto-reload on file changes:
+   ```bash
+   cd backend && uvicorn api:app --reload --port 5000
    ```
 
 ---
@@ -87,10 +91,11 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 * `test_serialization.py`: Validates SPARQL/RDF term serialization and local resource name validation.
 * `test_sparql_mutations.py`: Tests the execution of SPARQL-based updates (inserting, deleting, and replacing properties on existing subjects).
 * `test_sparql_creation.py`: Tests direct instance instantiation, class validation against GraphDB, and safe prefix-isolated test teardowns.
-* `test_explorer_api.py`: Tests the explorer-facing API — Flask routing contracts, health error mapping (503/400), tree inheritance parsing, and global search.
+* `test_explorer_api.py`: Tests the explorer-facing API — routing contracts, health error mapping (503/400), tree inheritance parsing, and global search.
+* `test_api_contract.py`: Pins the HTTP contract route by route — status code per failure class, required-parameter messages, empty-body creations, flag forwarding, slash redirect, and the one-at-a-time rule for the Owlready2 routes.
 * `test_web_mutations.py`: Tests web mutation endpoints (`/delete_value/`, `/create_class_instance/`, `/download_owl/`, `/delete_instance/`, the two deletion previews), the individual-only existence rule, boolean string parsing safety, and GraphDB error codes.
 * `test_cors.py`: Tests the CORS headers exposed for the separate Next.js frontend (`CORS_ALLOWED_ORIGINS`).
-* `test_openapi_spec.py`: Verifies `openapi.yaml` stays in sync with the Flask routes (every route documented, no stale operations).
+* `test_openapi_spec.py`: Verifies `openapi.yaml` stays in sync with the registered routes (every route documented, no stale operations).
 
 ---
 
@@ -104,7 +109,7 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 
 The full REST API is documented in [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1): every endpoint under `/api/v1.0/` with request/response schemas, error contracts (`400`/`503`/`500`), and which architecture path (direct SPARQL vs. in-memory Owlready2) serves it.
 
-* **Served by the API itself:** the running backend exposes the spec at `http://localhost:5000/api/v1.0/openapi.yaml`, so clients and tooling can consume it without a repository checkout.
+* **Served by the API itself:** the running backend exposes the spec at `http://localhost:5000/api/v1.0/openapi.yaml`, so clients and tooling can consume it without a repository checkout, and renders it as interactive documentation at `http://localhost:5000/api/v1.0/docs`.
 * **View it interactively:** paste the file into [editor.swagger.io](https://editor.swagger.io), or point any OpenAPI viewer at the URL above.
 * **Generate a typed client:** the Next.js frontend generates its TypeScript API types from the served spec (`npm run generate:api-types` in the frontend repo, using `openapi-typescript`).
-* **Kept in sync automatically:** `tests/test_openapi_spec.py` fails CI whenever a Flask route is added, removed, or renamed without updating the spec.
+* **Kept in sync automatically:** `tests/test_openapi_spec.py` fails CI whenever a route is added, removed, or renamed without updating the spec.

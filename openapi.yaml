@@ -25,7 +25,7 @@ info:
     url: https://github.com/ldrbmrtv/coupled_modelling
 servers:
   - url: http://localhost:5000/api/v1.0
-    description: Local development server (Flask)
+    description: Local development server (uvicorn)
 tags:
   - name: system
     description: Health and connection status.
@@ -1224,7 +1224,7 @@ components:
       type: string
       enum: ['True', 'False']
       default: 'False'
-      description: String-encoded boolean; recursion is unlimited only when the exact string `"True"` is sent.
+      description: String-encoded boolean; recursion is unlimited when `"True"` is sent (case-insensitive true/false, 1/0, yes/no and on/off are accepted as well).
 
     ClassHierarchyEntry:
       type: object

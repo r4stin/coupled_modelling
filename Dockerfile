@@ -14,4 +14,4 @@ EXPOSE 5000
 WORKDIR /app/backend
 
 # Bootstrap GraphDB (no-op once done), then serve on all interfaces.
-CMD ["sh", "-c", "python seed_graphdb.py && exec flask --app api run --host=0.0.0.0 --port=5000"]
+CMD ["sh", "-c", "python seed_graphdb.py && exec uvicorn api:app --host 0.0.0.0 --port 5000"]

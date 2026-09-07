@@ -7,6 +7,7 @@ import uuid as uuid_mod
 from unittest.mock import patch
 import main
 from main import GraphDBError
+from fastapi.testclient import TestClient
 from api import app
 
 class TestSparqlCreation(unittest.TestCase):
@@ -217,8 +218,8 @@ class TestSparqlCreation(unittest.TestCase):
         """)
         self.assertTrue(res_link.get("boolean", False))
 
-    def test_flask_api_create_instance(self):
-        client = app.test_client()
+    def test_api_create_instance(self):
+        client = TestClient(app)
         payload = {
             "property": "convergence_accelerators",
             "parent": self.test_parent,
@@ -233,7 +234,7 @@ class TestSparqlCreation(unittest.TestCase):
             res = client.post('/api/v1.0/create_instance/', json=payload)
             self.assertEqual(res.status_code, 201)
             
-            new_inst = res.get_json()
+            new_inst = res.json()
             self.assertTrue(new_inst.startswith(self.__class__.test_prefix))
             
             mock_reload.assert_not_called()
@@ -277,7 +278,7 @@ class TestSparqlCreation(unittest.TestCase):
         self.assertIn("does not exist in GraphDB", str(ctx.exception))
 
     def test_api_returns_503_on_graphdb_failure(self):
-        client = app.test_client()
+        client = TestClient(app)
         payload = {
             "property": "convergence_accelerators",
             "parent": self.test_parent

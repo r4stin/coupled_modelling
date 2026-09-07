@@ -1,4 +1,4 @@
-# Full-stack demo: GraphDB + Flask backend + Next.js explorer.
+# Full-stack demo: GraphDB + FastAPI backend + Next.js explorer.
 #
 # Requires the frontend repo cloned as a sibling directory:
 #   parent/
