@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 # Adjust paths to import from backend/
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend'))
 
-from api import app, router
+from api import app
+from routers import ROUTERS
 
 SPEC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'openapi.yaml')
 API_PREFIX = '/api/v1.0'
@@ -42,7 +43,7 @@ class TestOpenAPISpec(unittest.TestCase):
         self.assertEqual(yaml.safe_load(response.text), self.generated)
 
     def test_every_documented_route_is_registered_and_vice_versa(self):
-        registered = {(route.path, method) for route in router.routes if route.include_in_schema for method in route.methods}
+        registered = {(route.path, method) for router in ROUTERS for route in router.routes if route.include_in_schema for method in route.methods}
         documented = {(path, method.upper()) for path, item in self.generated['paths'].items() for method in item}
         self.assertEqual(documented, registered)
 

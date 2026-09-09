@@ -14,10 +14,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
-from api import app, error_floor, router
+from api import app, error_floor
 from main import GraphDBError
+from routers import ROUTERS
 
 PREFIX = '/api/v1.0/'
+
+# Module of each route, where its core calls are looked up and therefore patched.
+MODULE_OF = {route.path: route.endpoint.__module__ for router in ROUTERS for route in router.routes}
 
 
 class UnexpectedFailure(Exception):
@@ -94,9 +98,17 @@ ILL_TYPED = [
 ]
 
 
-def side_effect_patches(target):
-    """No-op patches for the reload/persist calls, except when one of them is the route's own target."""
-    return [patch(f'api.{name}') for name in SEMANTIC_SIDE_EFFECTS if name != target]
+def core_patches(path, target, **outcome):
+    """Patches the route's core call where its router binds it, and stubs reload/persist in main and in that module."""
+    module = MODULE_OF[PREFIX + path]
+    patches = [patch(f'{module}.{target}', **outcome)]
+    for name in SEMANTIC_SIDE_EFFECTS:
+        if name == target:
+            continue
+        patches.append(patch(f'main.{name}'))
+        if hasattr(sys.modules[module], name):
+            patches.append(patch(f'{module}.{name}'))
+    return patches
 
 
 def call(client, method, path, request):
@@ -118,7 +130,7 @@ class TestRouteContract(unittest.TestCase):
             if status is None:
                 continue
             with self.subTest(path=path), ExitStack() as stack:
-                for active in [patch(f'api.{target}', return_value=result)] + side_effect_patches(target):
+                for active in core_patches(path, target, return_value=result):
                     stack.enter_context(active)
                 got_status, got_body = call(self.client, method, path, request)
                 self.assertEqual(got_status, status)
@@ -128,7 +140,7 @@ class TestRouteContract(unittest.TestCase):
         for path, method, request, target, _, _, _, mapping in ROUTES:
             for failure, status in mapping.items():
                 with self.subTest(path=path, failure=failure.__name__), ExitStack() as stack:
-                    for active in [patch(f'api.{target}', side_effect=failure('boom'))] + side_effect_patches(target):
+                    for active in core_patches(path, target, side_effect=failure('boom')):
                         stack.enter_context(active)
                     got_status, got_body = call(self.client, method, path, request)
                     self.assertEqual(got_status, status)
@@ -137,7 +149,7 @@ class TestRouteContract(unittest.TestCase):
     def test_health_failure_bodies(self):
         for failure, status in ((GraphDBError, 503), (UnexpectedFailure, 500)):
             with self.subTest(failure=failure.__name__):
-                with patch('api.get_graphdb_health', side_effect=failure('down')):
+                with patch('routers.system.get_graphdb_health', side_effect=failure('down')):
                     got_status, got_body = call(self.client, 'GET', 'health/', {})
                 self.assertEqual(got_status, status)
                 self.assertEqual(got_body['status'], 'error')
@@ -161,30 +173,30 @@ class TestRouteContract(unittest.TestCase):
                 self.assertIn(parameter, got_body['error'])
 
     def test_cascade_defaults_to_true_and_false_is_forwarded(self):
-        with patch('api.delete_instance_sparql', return_value={'instance': 'i', 'deleted': [], 'kept': [], 'unlinked_from': []}) as core:
+        with patch('routers.mutations.delete_instance_sparql', return_value={'instance': 'i', 'deleted': [], 'kept': [], 'unlinked_from': []}) as core:
             call(self.client, 'POST', 'delete_instance/', {'json': {'instance': 'i'}})
             core.assert_called_with('i', cascade=True)
             call(self.client, 'POST', 'delete_instance/', {'json': {'instance': 'i', 'cascade': False}})
             core.assert_called_with('i', cascade=False)
-        with patch('api.get_instance_deletion_preview', return_value={}) as core:
+        with patch('routers.explorer.get_instance_deletion_preview', return_value={}) as core:
             call(self.client, 'GET', 'get_instance_deletion_preview/', {'query': {'instance': 'i', 'cascade': 'false'}})
             core.assert_called_with('i', cascade=False)
 
     def test_depth_and_recursive_query_flags_are_forwarded(self):
-        with patch('api.reload_ontology_from_graphdb'), \
-                patch('api.get_instance_properties_recursively', return_value={}) as core:
+        with patch('routers.semantic.reload_ontology_from_graphdb'), \
+                patch('routers.semantic.get_instance_properties_recursively', return_value={}) as core:
             call(self.client, 'GET', 'get_instance_properties_recursively/', {'query': {'instance': 'i'}})
             core.assert_called_with('i', 1, False)
             call(self.client, 'GET', 'get_instance_properties_recursively/', {'query': {'instance': 'i', 'depth': '2', 'recursive': 'True'}})
             core.assert_called_with('i', 2, True)
-        with patch('api.reload_ontology_from_graphdb'), \
-                patch('api.get_class_properties_recursively', return_value={}) as core:
+        with patch('routers.legacy.reload_ontology_from_graphdb'), \
+                patch('routers.legacy.get_class_properties_recursively', return_value={}) as core:
             call(self.client, 'GET', 'get_class_properties_recursively/', {'query': {'class': 'c', 'depth': '3', 'recursive': 'True'}})
             core.assert_called_with('c', 3, True)
 
     def test_copy_body_flags_are_forwarded(self):
-        with patch('api.reload_ontology_from_graphdb'), patch('api.save_onto'), \
-                patch('api.copy_instance_recursively', return_value='instance_new') as core:
+        with patch('routers.semantic.reload_ontology_from_graphdb'), patch('routers.semantic.save_onto'), \
+                patch('routers.semantic.copy_instance_recursively', return_value='instance_new') as core:
             call(self.client, 'POST', 'copy_instance_recursively/', {'json': {'instance': 'i', 'parent': 'p', 'data': {'a': 1}, 'depth': 2, 'recursive': 'True'}})
             core.assert_called_with('i', 'p', {'a': 1}, 2, True)
             call(self.client, 'POST', 'copy_instance_recursively/', {'json': {'instance': 'i'}})
@@ -194,7 +206,7 @@ class TestRouteContract(unittest.TestCase):
             core.assert_called_with('i', None, None, None, True)
 
     def test_search_defaults(self):
-        with patch('api.search_entities', return_value={'classes': [], 'instances': []}) as core:
+        with patch('routers.explorer.search_entities', return_value={'classes': [], 'instances': []}) as core:
             call(self.client, 'GET', 'search/', {'query': {'q': 'wing'}})
             args = core.call_args[0]
             self.assertEqual(args[:2], ('wing', 'all'))
@@ -203,7 +215,7 @@ class TestRouteContract(unittest.TestCase):
             core.assert_called_with('wing', 'class', 5)
 
     def test_head_and_malformed_json(self):
-        with patch('api.get_graphdb_health', return_value={'status': 'ok'}):
+        with patch('routers.system.get_graphdb_health', return_value={'status': 'ok'}):
             self.assertEqual(self.client.head(PREFIX + 'health/').status_code, 200)
         malformed = self.client.post(PREFIX + 'delete_instance/', content=b'{bad', headers={'Content-Type': 'application/json'})
         self.assertEqual(malformed.status_code, 400)
@@ -217,21 +229,21 @@ class TestRouteContract(unittest.TestCase):
         self.assertNotIn(';', got_body['error'])
 
     def test_core_result_outside_the_contract_is_reported_without_internals(self):
-        with patch('api.get_value_deletion_preview', return_value={'target': 't', 'deleted': [], 'kept': [], 'surprise': 1}):
+        with patch('routers.explorer.get_value_deletion_preview', return_value={'target': 't', 'deleted': [], 'kept': [], 'surprise': 1}):
             got_status, got_body = call(self.client, 'GET', 'get_value_deletion_preview/', {'query': {'instance': 'i', 'property': 'p', 'target': 't'}})
         self.assertEqual(got_status, 500)
         self.assertTrue(got_body['error'].startswith('Response does not match the API contract'), got_body)
         self.assertNotIn('/home', got_body['error'])
 
     def test_typed_value_targets_reach_the_core_as_dicts(self):
-        with patch('api.replace_value_sparql') as core:
+        with patch('routers.mutations.replace_value_sparql') as core:
             call(self.client, 'POST', 'replace_value/', {'json': {
                 'instance': 'i', 'property': 'p',
                 'old_value': {'kind': 'literal', 'value': 'a', 'datatype': 'http://www.w3.org/2001/XMLSchema#string'},
                 'new_value': {'kind': 'object', 'id': 'instance_2'},
             }})
             core.assert_called_with('i', 'p', {'kind': 'literal', 'value': 'a', 'datatype': 'http://www.w3.org/2001/XMLSchema#string'}, {'kind': 'object', 'id': 'instance_2'})
-        with patch('api.delete_value_sparql', return_value={'target': None, 'deleted': [], 'kept': []}) as core:
+        with patch('routers.mutations.delete_value_sparql', return_value={'target': None, 'deleted': [], 'kept': []}) as core:
             call(self.client, 'POST', 'delete_value/', {'json': {'instance': 'i', 'property': 'p', 'value': 'plain'}})
             core.assert_called_with('i', 'p', 'plain', cascade=True)
 
@@ -247,7 +259,13 @@ class TestRouteContract(unittest.TestCase):
     def test_every_route_has_a_contract_row(self):
         """A route added without a row here is neither status- nor message-checked."""
         listed = {PREFIX + path for path, *_ in ROUTES} | {PREFIX + 'health/', PREFIX + 'openapi.yaml'}
-        self.assertEqual({route.path for route in router.routes}, listed)
+        self.assertEqual(set(MODULE_OF), listed)
+
+    def test_direct_sparql_routers_bind_no_owlready_side_effects(self):
+        """A route with the explorer failure mapping runs on direct SPARQL: its module never reloads or persists the Owlready2 world."""
+        direct = {MODULE_OF[PREFIX + path] for path, *_, mapping in ROUTES if mapping is EXPLORER}
+        for module in sorted(direct):
+            self.assertFalse(set(SEMANTIC_SIDE_EFFECTS) & vars(sys.modules[module]).keys(), module)
 
     def test_unmapped_failure_answers_in_the_error_shape(self):
         """The floor turns an escaped failure into the JSON error body, with CORS headers."""
@@ -265,7 +283,7 @@ class TestRouteContract(unittest.TestCase):
         response = self.client.post(PREFIX + 'add_values', json={'instance': 'i', 'data': {}}, follow_redirects=False)
         self.assertIn(response.status_code, (307, 308))
         self.assertTrue(response.headers['location'].endswith(PREFIX + 'add_values/'))
-        with patch('api.add_values_sparql'):
+        with patch('routers.mutations.add_values_sparql'):
             followed = self.client.post(PREFIX + 'add_values', json={'instance': 'i', 'data': {}})
         self.assertEqual(followed.status_code, 201)
 
@@ -284,7 +302,7 @@ class TestRouteContract(unittest.TestCase):
             inside.remove(name)
             return {}
 
-        with patch('api.reload_ontology_from_graphdb'), patch('api.export_coupled_kratos', side_effect=slow_export):
+        with patch('routers.semantic.reload_ontology_from_graphdb'), patch('routers.semantic.export_coupled_kratos', side_effect=slow_export):
             threads = [threading.Thread(target=call, args=(self.client, 'POST', 'export_coupled_kratos/', {'json': {'coupled_system': f'i{n}'}})) for n in range(3)]
             for thread in threads:
                 thread.start()

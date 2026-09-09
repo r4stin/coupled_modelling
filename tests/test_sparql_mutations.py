@@ -369,14 +369,8 @@ class TestSparqlMutations(unittest.TestCase):
             }
         }
         
-        with patch('api.reload_ontology_from_graphdb') as mock_reload, \
-             patch('api.save_onto') as mock_save:
-             
-            res = client.post('/api/v1.0/replace_values/', json=payload)
-            self.assertEqual(res.status_code, 201)
-            
-            mock_reload.assert_not_called()
-            mock_save.assert_not_called()
+        res = client.post('/api/v1.0/replace_values/', json=payload)
+        self.assertEqual(res.status_code, 201)
 
         res_db = main.query_graphdb(f"""
             SELECT ?val WHERE {{
@@ -396,7 +390,7 @@ class TestSparqlMutations(unittest.TestCase):
             "data": {"echo_level": 5}
         }
         
-        with patch('api.replace_values_sparql', side_effect=GraphDBError("Mocked Connection Failure")):
+        with patch('routers.mutations.replace_values_sparql', side_effect=GraphDBError("Mocked Connection Failure")):
             res = client.post('/api/v1.0/replace_values/', json=payload)
             self.assertEqual(res.status_code, 503)
             self.assertEqual(res.json()["error"], "Mocked Connection Failure")

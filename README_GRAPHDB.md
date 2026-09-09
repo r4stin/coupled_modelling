@@ -102,12 +102,13 @@ The SPARQL integration tests require a running GraphDB instance and modify repos
 ## 7. Architecture: Hybrid Owlready2 + GraphDB
 * **Direct SPARQL mutations:** Simple value insertions, deletions, replacements, instance creation (UUID-based), and instance deletion (cascading over the instance's owned subtree, keeping anything still linked from elsewhere) run directly in GraphDB via transactional SPARQL Update requests.
 * **In-memory Owlready2 workflows:** Copy operations, complex ontology construction, KRATOS JSON import/export, and structural inference continue to use Owlready2 and synchronize with GraphDB.
+* **HTTP layer:** `backend/api.py` assembles the FastAPI application from one router per tag in `backend/routers/` (`system`, `explorer`, `mutations`, `semantic`, `files`, `legacy`); `backend/routing.py` holds the helpers the routers share (error mapping, documented error responses, the GET+HEAD registration, the one-at-a-time lock of the Owlready2 routes).
 
 ---
 
 ## 8. API Reference (OpenAPI)
 
-The REST API is documented by [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), generated from the route declarations in `backend/api.py` and the models in `backend/schemas.py`: every endpoint under `/api/v1.0/` with request/response schemas, error contracts (`400`/`503`/`500`), and which architecture path (direct SPARQL vs. in-memory Owlready2) serves it.
+The REST API is documented by [`openapi.yaml`](openapi.yaml) (OpenAPI 3.1), generated from the route declarations in `backend/routers/` and the models in `backend/schemas.py`: every endpoint under `/api/v1.0/` with request/response schemas, error contracts (`400`/`503`/`500`), and which architecture path (direct SPARQL vs. in-memory Owlready2) serves it.
 
 * **Served by the API itself:** the running backend exposes the document at `http://localhost:5000/api/v1.0/openapi.yaml` (JSON at `/api/v1.0/openapi.json`) and renders it as interactive documentation at `http://localhost:5000/api/v1.0/docs`.
 * **Regenerate after a route or model change:** `python backend/export_openapi.py` rewrites `openapi.yaml`; `tests/test_openapi_spec.py` fails CI whenever the committed file differs from the generated document.

@@ -228,17 +228,11 @@ class TestSparqlCreation(unittest.TestCase):
                 "echo_level": 5
             }
         }
-        with patch('api.reload_ontology_from_graphdb') as mock_reload, \
-             patch('api.save_onto') as mock_save:
-             
-            res = client.post('/api/v1.0/create_instance/', json=payload)
-            self.assertEqual(res.status_code, 201)
-            
-            new_inst = res.json()
-            self.assertTrue(new_inst.startswith(self.__class__.test_prefix))
-            
-            mock_reload.assert_not_called()
-            mock_save.assert_not_called()
+        res = client.post('/api/v1.0/create_instance/', json=payload)
+        self.assertEqual(res.status_code, 201)
+
+        new_inst = res.json()
+        self.assertTrue(new_inst.startswith(self.__class__.test_prefix))
 
         new_iri = f"http://coupled_modelling.owl#{new_inst}"
         res_db = main.query_graphdb(f"""

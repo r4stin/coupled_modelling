@@ -10,7 +10,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'backend'))
 
 from fastapi.testclient import TestClient
-from api import app, router
+from api import app
+from routers import ROUTERS
 from main import (
     GraphDBError, 
     select_preferred_label, 
@@ -26,13 +27,13 @@ class TestExplorerApi(unittest.TestCase):
         self.app = TestClient(app)
     def test_root_route_removed(self):
         """The API serves no UI: every registered route lives under /api/."""
-        # Routes included from the router plus any registered on the app itself.
-        paths = {route.path for route in router.routes} | {route.path for route in app.routes if hasattr(route, 'path')}
+        # Routes included from the routers plus any registered on the app itself.
+        paths = {route.path for router in ROUTERS for route in router.routes} | {route.path for route in app.routes if hasattr(route, 'path')}
         non_api = [path for path in paths if not path.startswith('/api/')]
         self.assertEqual(non_api, [])
         self.assertEqual(self.app.get('/').status_code, 404)
 
-    @patch('api.get_graphdb_health')
+    @patch('routers.system.get_graphdb_health')
     def test_health_check_online(self, mock_health):
         """Verify health check returns 200 OK and connected schema on success."""
         mock_health.return_value = {
@@ -49,7 +50,7 @@ class TestExplorerApi(unittest.TestCase):
         self.assertEqual(data["graphdb"], "connected")
         self.assertEqual(data["repository"], "coupled_modelling")
 
-    @patch('api.get_graphdb_health')
+    @patch('routers.system.get_graphdb_health')
     def test_health_check_offline(self, mock_health):
         """Verify health check returns 503 Service Unavailable when GraphDB fails."""
         mock_health.side_effect = GraphDBError("Connection refused by GraphDB host")
@@ -64,35 +65,35 @@ class TestExplorerApi(unittest.TestCase):
 
     # --- API Exception response code tests ---
 
-    @patch('api.get_class_hierarchy_metadata')
+    @patch('routers.explorer.get_class_hierarchy_metadata')
     def test_get_class_hierarchy_metadata_error_503(self, mock_helper):
         """Verify get_class_hierarchy_metadata returns 503 on GraphDBError."""
         mock_helper.side_effect = GraphDBError("GraphDB down")
         response = self.app.get('/api/v1.0/get_class_hierarchy_metadata/')
         self.assertEqual(response.status_code, 503)
 
-    @patch('api.get_class_hierarchy_metadata')
+    @patch('routers.explorer.get_class_hierarchy_metadata')
     def test_get_class_hierarchy_metadata_error_400(self, mock_helper):
         """Verify get_class_hierarchy_metadata returns 400 on ValueError."""
         mock_helper.side_effect = ValueError("Invalid structure")
         response = self.app.get('/api/v1.0/get_class_hierarchy_metadata/')
         self.assertEqual(response.status_code, 400)
 
-    @patch('api.get_class_instance_summaries')
+    @patch('routers.explorer.get_class_instance_summaries')
     def test_get_class_instance_summaries_error_503(self, mock_helper):
         """Verify get_class_instance_summaries returns 503 on GraphDBError."""
         mock_helper.side_effect = GraphDBError("GraphDB down")
         response = self.app.get('/api/v1.0/get_class_instance_summaries/?class=coupled_system')
         self.assertEqual(response.status_code, 503)
 
-    @patch('api.get_class_instance_summaries')
+    @patch('routers.explorer.get_class_instance_summaries')
     def test_get_class_instance_summaries_error_400(self, mock_helper):
         """Verify get_class_instance_summaries returns 400 on ValueError."""
         mock_helper.side_effect = ValueError("Unknown class")
         response = self.app.get('/api/v1.0/get_class_instance_summaries/?class=coupled_system')
         self.assertEqual(response.status_code, 400)
 
-    @patch('api.get_class_instance_summaries')
+    @patch('routers.explorer.get_class_instance_summaries')
     def test_get_class_instance_summaries_optional_class(self, mock_helper):
         """Verify get_class_instance_summaries succeeds with 200 when class param is omitted (global search)."""
         mock_helper.return_value = [{"id": "instance_1", "label": "GlobalInst", "types": ["solver"], "property_preview": [], "preview_truncated": False}]
@@ -100,21 +101,21 @@ class TestExplorerApi(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         mock_helper.assert_called_with(None)
 
-    @patch('api.get_instance_property_metadata')
+    @patch('routers.explorer.get_instance_property_metadata')
     def test_get_instance_property_metadata_error_503(self, mock_helper):
         """Verify get_instance_property_metadata returns 503 on GraphDBError."""
         mock_helper.side_effect = GraphDBError("GraphDB down")
         response = self.app.get('/api/v1.0/get_instance_property_metadata/?instance=instance_cfd')
         self.assertEqual(response.status_code, 503)
 
-    @patch('api.get_instance_property_metadata')
+    @patch('routers.explorer.get_instance_property_metadata')
     def test_get_instance_property_metadata_error_400(self, mock_helper):
         """Verify get_instance_property_metadata returns 400 on ValueError."""
         mock_helper.side_effect = ValueError("Unknown instance")
         response = self.app.get('/api/v1.0/get_instance_property_metadata/?instance=instance_cfd')
         self.assertEqual(response.status_code, 400)
 
-    @patch('api.get_value_deletion_preview')
+    @patch('routers.explorer.get_value_deletion_preview')
     def test_get_value_deletion_preview_passes_parameters(self, mock_helper):
         mock_helper.return_value = {"target": "instance_c", "deleted": ["instance_c"], "kept": []}
         response = self.app.get('/api/v1.0/get_value_deletion_preview/?instance=instance_a&property=solver&target=instance_c')
@@ -122,13 +123,13 @@ class TestExplorerApi(unittest.TestCase):
         self.assertEqual(response.json(), mock_helper.return_value)
         mock_helper.assert_called_once_with('instance_a', 'solver', 'instance_c')
 
-    @patch('api.get_value_deletion_preview')
+    @patch('routers.explorer.get_value_deletion_preview')
     def test_get_value_deletion_preview_requires_every_parameter(self, mock_helper):
         for query in ('instance=a&property=b', 'instance=a&target=c', 'property=b&target=c'):
             self.assertEqual(self.app.get(f'/api/v1.0/get_value_deletion_preview/?{query}').status_code, 400, query)
         mock_helper.assert_not_called()
 
-    @patch('api.get_value_deletion_preview')
+    @patch('routers.explorer.get_value_deletion_preview')
     def test_get_value_deletion_preview_error_mapping(self, mock_helper):
         url = '/api/v1.0/get_value_deletion_preview/?instance=a&property=b&target=c'
         mock_helper.side_effect = GraphDBError("GraphDB down")
@@ -136,7 +137,7 @@ class TestExplorerApi(unittest.TestCase):
         mock_helper.side_effect = ValueError("Unknown instance")
         self.assertEqual(self.app.get(url).status_code, 400)
 
-    @patch('api.delete_value_sparql')
+    @patch('routers.mutations.delete_value_sparql')
     def test_delete_value_route_returns_the_unlink_sets(self, mock_helper):
         mock_helper.return_value = {"target": "instance_c", "deleted": ["instance_c"], "kept": []}
         payload = {"instance": "instance_a", "property": "solver", "value": {"kind": "object", "id": "instance_c"}}
@@ -145,7 +146,7 @@ class TestExplorerApi(unittest.TestCase):
         self.assertEqual(response.json(), {"status": "success", **mock_helper.return_value})
         mock_helper.assert_called_once_with("instance_a", "solver", payload["value"], cascade=True)
 
-    @patch('api.delete_value_sparql')
+    @patch('routers.mutations.delete_value_sparql')
     def test_delete_value_route_validates_cascade(self, mock_helper):
         payload = {"instance": "instance_a", "property": "solver", "value": {"kind": "object", "id": "instance_c"}, "cascade": "no"}
         self.assertEqual(self.app.post('/api/v1.0/delete_value/', json=payload).status_code, 400)
@@ -416,14 +417,14 @@ class TestExplorerApi(unittest.TestCase):
         self.assertEqual(res["properties"][2]["values"][0]["property_preview"], [{"property": "name", "value": "CFD", "kind": "literal"}])
         self.assertFalse(res["properties"][2]["values"][0]["preview_truncated"])
 
-    @patch('api.get_class_metadata')
+    @patch('routers.explorer.get_class_metadata')
     def test_get_class_metadata_error_503(self, mock_helper):
         """Verify get_class_metadata returns 503 on GraphDBError."""
         mock_helper.side_effect = GraphDBError("GraphDB offline")
         response = self.app.get('/api/v1.0/get_class_metadata/?class=solver')
         self.assertEqual(response.status_code, 503)
 
-    @patch('api.get_class_metadata')
+    @patch('routers.explorer.get_class_metadata')
     def test_get_class_metadata_error_400(self, mock_helper):
         """Verify get_class_metadata returns 400 on ValueError."""
         mock_helper.side_effect = ValueError("Invalid class")
@@ -604,7 +605,7 @@ class TestSearch(unittest.TestCase):
         response = self.app.get('/api/v1.0/search/?q=x&limit=abc')
         self.assertEqual(response.status_code, 400)
 
-    @patch('api.search_entities')
+    @patch('routers.explorer.search_entities')
     def test_search_route_passes_parameters(self, mock_search):
         """Verify q, type, and limit reach search_entities as typed values."""
         mock_search.return_value = {"classes": [], "instances": []}
@@ -612,7 +613,7 @@ class TestSearch(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         mock_search.assert_called_once_with('mok', 'instance', 5)
 
-    @patch('api.search_entities')
+    @patch('routers.explorer.search_entities')
     def test_search_route_rejects_empty_limit(self, mock_search):
         """An empty limit is not a number: 400 naming the parameter, the search never runs."""
         mock_search.return_value = {"classes": [], "instances": []}
